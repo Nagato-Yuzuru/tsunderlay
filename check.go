@@ -18,20 +18,24 @@ import (
 
 const dnsTimeout = 5 * time.Second
 
-// check prints the facts and the plan that the daemon would use.
-func check(ctx context.Context, w io.Writer) (int, error) {
+// check prints the facts and the plan that the daemon would use. It returns
+// exitCode(1) when the state is not healthy.
+func check(ctx context.Context, w io.Writer) error {
 	table, err := rib.Fetch()
 	if err != nil {
-		return 2, err
+		return err
 	}
 	control, dnsErr := resolveControl(ctx)
 	f := underlay.DeriveFacts(table, control)
 	plan := underlay.Plan(f)
 
 	if _, err := io.WriteString(w, report(f, dnsErr, plan)); err != nil {
-		return 2, fmt.Errorf("writing the report: %w", err)
+		return fmt.Errorf("writing the report: %w", err)
 	}
-	return status(f, plan), nil
+	if code := status(f, plan); code != 0 {
+		return exitCode(code)
+	}
+	return nil
 }
 
 func report(f underlay.Facts, dnsErr error, plan []underlay.Action) string {
