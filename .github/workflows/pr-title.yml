@@ -1,6 +1,5 @@
-# A squash merge uses the PR title as the commit subject. The local
-# commit-msg hook does not see the PR title, so this workflow checks it with
-# the same hook.
+# A squash merge uses the PR title as the commit subject, so the title is the
+# only commit subject that reaches main. The changelog parser checks it.
 name: pr-title
 
 on:
@@ -27,9 +26,9 @@ jobs:
           persist-credentials: false
       - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
         with:
-          install_args: prek git-cliff
+          install_args: git-cliff
       - env:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
           printf '%s\n' "$TITLE" > "$RUNNER_TEMP/title.txt"
-          prek run --stage commit-msg --commit-msg-filename "$RUNNER_TEMP/title.txt"
+          scripts/check-commit-msg.sh "$RUNNER_TEMP/title.txt"

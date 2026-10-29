@@ -1,5 +1,6 @@
 #!/bin/sh
-# Check the commit message with the same parser that generates the changelog.
+# Check a commit message (in CI: the PR title) with the parser that generates
+# the changelog.
 set -eu
 
 # The empty range HEAD..HEAD checks only the new message, not the history.
