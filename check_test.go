@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -14,6 +15,7 @@ func TestStatus(t *testing.T) {
 	tests := []struct {
 		name string
 		vpn  underlay.VPN
+		dns  error
 		plan []underlay.Action
 		want int
 	}{
@@ -21,10 +23,11 @@ func TestStatus(t *testing.T) {
 		{name: "no VPN and nothing to do", vpn: underlay.NoVPN{}, want: 0},
 		{name: "a change is necessary", vpn: underlay.SplitDefault{}, plan: []underlay.Action{underlay.Add{Route: r}}, want: 1},
 		{name: "ambiguous has no plan but is not healthy", vpn: underlay.Ambiguous{}, want: 1},
+		{name: "DNS failure has no plan but is not healthy", vpn: underlay.SplitDefault{}, dns: errors.New("no such host"), want: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := status(underlay.Facts{VPN: tt.vpn}, tt.plan); got != tt.want {
+			if got := status(underlay.Facts{VPN: tt.vpn}, tt.dns, tt.plan); got != tt.want {
 				t.Errorf("status = %d, want %d", got, tt.want)
 			}
 		})

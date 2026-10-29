@@ -9,44 +9,41 @@ import (
 	"net"
 	"net/netip"
 	"strings"
-	"time"
 
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/rib"
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/routecmd"
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
 )
 
-const dnsTimeout = 5 * time.Second
-
 // check prints the facts and the plan that the daemon would use. It returns
 // exitCode(1) when the state is not healthy.
-func check(ctx context.Context, w io.Writer) error {
+func check(ctx context.Context, w io.Writer, hosts []string) error {
 	table, err := rib.Fetch()
 	if err != nil {
 		return err
 	}
-	control, dnsErr := resolveControl(ctx)
+	control, dnsErr := resolveControl(ctx, net.DefaultResolver.LookupNetIP, hosts)
 	f := underlay.DeriveFacts(table, control)
 	plan := underlay.Plan(f)
 
-	if _, err := io.WriteString(w, report(f, dnsErr, plan)); err != nil {
+	if _, err := io.WriteString(w, report(f, hosts, dnsErr, plan)); err != nil {
 		return fmt.Errorf("writing the report: %w", err)
 	}
-	if code := status(f, plan); code != 0 {
+	if code := status(f, dnsErr, plan); code != 0 {
 		return exitCode(code)
 	}
 	return nil
 }
 
-func report(f underlay.Facts, dnsErr error, plan []underlay.Action) string {
+func report(f underlay.Facts, hosts []string, dnsErr error, plan []underlay.Action) string {
 	lines := []string{
 		"lan:     " + lan(f.LAN),
 		"vpn:     " + vpn(f.VPN),
 	}
 	if dnsErr != nil {
-		lines = append(lines, fmt.Sprintf("control: %s: no answer (%v); owned control routes stay", underlay.ControlHost, dnsErr))
+		lines = append(lines, fmt.Sprintf("control: %s: no answer (%v); owned control routes stay", strings.Join(hosts, ", "), dnsErr))
 	} else {
-		lines = append(lines, fmt.Sprintf("control: %s -> %s", underlay.ControlHost, joinPrefixes(f.Control)))
+		lines = append(lines, fmt.Sprintf("control: %s -> %s", strings.Join(hosts, ", "), joinPrefixes(f.Control)))
 	}
 	if len(plan) == 0 {
 		lines = append(lines, "plan:    none")
@@ -59,25 +56,14 @@ func report(f underlay.Facts, dnsErr error, plan []underlay.Action) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// status is the exit code of check. An ambiguous VPN state has no plan, but
-// it is not healthy: Tailscale may use either tunnel.
-func status(f underlay.Facts, plan []underlay.Action) int {
-	if _, ok := f.VPN.(underlay.Ambiguous); ok || len(plan) > 0 {
+// status is the exit code of check. Two states have no plan, but are not
+// healthy: an ambiguous VPN state (Tailscale may use either tunnel), and a
+// DNS failure (check cannot confirm the control routes).
+func status(f underlay.Facts, dnsErr error, plan []underlay.Action) int {
+	if _, ok := f.VPN.(underlay.Ambiguous); ok || dnsErr != nil || len(plan) > 0 {
 		return 1
 	}
 	return 0
-}
-
-// resolveControl returns the /24s of the control plane. It returns no
-// prefixes when DNS gives no answer, and Plan then keeps the owned routes.
-func resolveControl(ctx context.Context) ([]netip.Prefix, error) {
-	ctx, cancel := context.WithTimeout(ctx, dnsTimeout)
-	defer cancel()
-	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", underlay.ControlHost)
-	if err != nil {
-		return nil, fmt.Errorf("resolving %s: %w", underlay.ControlHost, err)
-	}
-	return underlay.ControlPrefixes(addrs), nil
 }
 
 func lan(l *underlay.Link) string {

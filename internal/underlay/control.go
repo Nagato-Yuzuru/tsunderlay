@@ -5,10 +5,6 @@ import (
 	"slices"
 )
 
-// ControlHost is the control plane of both nodes. Neither node on the
-// development Mac sets a custom control URL.
-const ControlHost = "controlplane.tailscale.com"
-
 // ControlPrefixes maps the resolved control-plane addresses to their /24s,
 // sorted and without duplicates. DNS answers rotate through the addresses of
 // a /24, and Tailscale's own resolver can pick any of them, so a /32 route
