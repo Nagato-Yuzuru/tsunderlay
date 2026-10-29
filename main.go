@@ -25,7 +25,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	root := newRootCmd()
+	root := newRootCmd() //nolint:contextcheck // the commands get ctx from ExecuteContext below, through cmd.Context()
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -53,7 +53,8 @@ func newRootCmd() *cobra.Command {
 }
 
 func newCheckCmd() *cobra.Command {
-	return &cobra.Command{
+	var urls []string
+	cmd := &cobra.Command{
 		Use:   "check",
 		Short: "Print the network facts and the planned route changes",
 		Long: `Print the network facts and the planned route changes.
@@ -62,9 +63,22 @@ Exit status 0: no change is necessary. 1: a change is necessary, or the VPN
 state is ambiguous. 2: an error.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return check(cmd.Context(), cmd.OutOrStdout())
+			hosts, err := controlHosts(urls)
+			if err != nil {
+				return err
+			}
+			return check(cmd.Context(), cmd.OutOrStdout(), hosts)
 		},
 	}
+	addControlURLFlag(cmd, &urls)
+	return cmd
+}
+
+// addControlURLFlag adds --control-url. check and run take the same flag, so
+// that check shows what the daemon does.
+func addControlURLFlag(cmd *cobra.Command, urls *[]string) {
+	cmd.Flags().StringArrayVar(urls, "control-url", []string{defaultControlURL},
+		"control server URL of a Tailscale node on this Mac; repeat for each server (for example a Headscale server). Replaces the default")
 }
 
 func warn(w io.Writer, s string) {
