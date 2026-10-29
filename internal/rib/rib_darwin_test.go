@@ -12,6 +12,9 @@ import (
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
 )
 
+// The messages copy the shapes of the routing table of the development Mac.
+// They are hand-written for the same reason as the fixtures of package
+// underlay.
 const (
 	en0   = 14
 	utun5 = 38

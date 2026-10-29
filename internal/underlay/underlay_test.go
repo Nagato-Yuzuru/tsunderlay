@@ -9,7 +9,10 @@ import (
 )
 
 // The addresses follow the tables on the development Mac: Astrill on utun5
-// (198.18.64.1), the system Tailscale app on utun3, Wi-Fi on en0.
+// (198.18.64.1), the system Tailscale app on utun3, Wi-Fi on en0. The
+// fixtures copy the shapes of those tables by hand. Do not commit a real
+// dump: it holds a cloned host route to each site that the Mac visited, and
+// this repository is public.
 var (
 	lanGw    = netip.MustParseAddr("192.168.2.1")
 	newLanGw = netip.MustParseAddr("10.0.0.1")
