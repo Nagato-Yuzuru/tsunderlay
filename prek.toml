@@ -2,9 +2,9 @@
 # Local hooks call tools through `mise exec`, so that git hooks get the
 # versions pinned in mise.toml.
 
-default_install_hook_types = ["pre-commit", "commit-msg"]
-# Without this, every hook also runs in the commit-msg stage.
-default_stages = ["pre-commit"]
+# Every change reaches main as a squash merge with the PR title as the
+# subject, so CI checks the title and no local hook checks commit messages.
+default_install_hook_types = ["pre-commit"]
 
 # The builtin hooks that need no project-specific arguments.
 [[repos]]
@@ -53,14 +53,4 @@ hooks = [
   { id = "jactionlint", name = "jactionlint", language = "system", entry = "mise exec -- jactionlint", files = '^\.github/workflows/.*\.ya?ml$' },
   # Offline audits need no GitHub token, so the hook works the same in CI.
   { id = "zizmor", name = "zizmor", language = "system", entry = "mise exec -- zizmor --offline", files = '^\.github/workflows/.*\.ya?ml$' },
-]
-
-# The changelog parser checks the subject, so that every commit on main can
-# go into the changelog.
-[[repos]]
-repo = "local"
-hooks = [
-  { id = "conventional-commit", name = "conventional commit (git-cliff)", language = "script", entry = "scripts/check-commit-msg.sh", stages = [
-    "commit-msg",
-  ] },
 ]
