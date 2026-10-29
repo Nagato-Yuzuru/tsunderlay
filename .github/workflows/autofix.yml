@@ -1,0 +1,30 @@
+# autofix.ci identifies this workflow by its name. Do not change the name.
+name: autofix.ci
+
+# Only a PR can take a fix: the rules on main do not allow a direct push.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MISE_LOCKED: "1"
+
+jobs:
+  autofix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      # The fixing hooks change files. This job ignores hook failures: the
+      # ci workflow reports them. autofix.ci commits only the file changes.
+      - run: prek run --all-files || true
+      - uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a # v1.3.4

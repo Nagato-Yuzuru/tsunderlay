@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Renovate updates mise.lock itself. A lock that does not agree with
+  # mise.toml fails the install, so that a mise update can merge without
+  # a review. Without this, mise-action repairs the lock and hides it.
+  MISE_LOCKED: "1"
+
+jobs:
+  check:
+    name: check (hooks, lint, format)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - run: prek run --all-files
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # The system code is darwin-only. On linux, go test sees only the
+        # OS-independent core, so a core change that needs macOS fails here.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      # go test reuses the result of a package whose test binary did not
+      # change, so a PR runs only the tests that its change can affect.
+      - id: gocache
+        run: echo "dir=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: gocache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: gocache-${{ runner.os }}-
+      - run: go test -race ./...
+
+  # The only required check of this workflow. A skipped job counts as
+  # passed; a failed or cancelled job fails it. A new job must be added
+  # to needs.
+  ci-ok:
+    needs: [check, test]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: exit 1

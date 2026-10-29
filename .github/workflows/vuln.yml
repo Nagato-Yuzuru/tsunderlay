@@ -1,0 +1,45 @@
+name: vuln
+
+on:
+  # The Go version from mise decides the standard library that is checked.
+  pull_request:
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
+      - mise.toml
+      - mise.lock
+      - .github/workflows/vuln.yml
+  # A new advisory can affect code that did not change. The daily run also
+  # covers main after each merge.
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MISE_LOCKED: "1"
+
+jobs:
+  govulncheck:
+    name: govulncheck (${{ matrix.goos }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # The call graph depends on build constraints.
+        goos: [linux, darwin]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - run: govulncheck ./...
+        env:
+          GOOS: ${{ matrix.goos }}
