@@ -43,14 +43,14 @@ func controlHosts(urls []string) ([]string, error) {
 // has this shape.
 type lookupFunc func(ctx context.Context, network, host string) ([]netip.Addr, error)
 
-// resolveControl returns the /24s of the control hosts. An IP literal needs
-// no DNS. When any lookup fails, it returns no prefixes and the error: Plan
-// then keeps all owned control routes. A partial answer would make Plan
-// delete the routes of the host that gave no answer.
-func resolveControl(ctx context.Context, lookup lookupFunc, hosts []string) ([]netip.Prefix, error) {
+// resolveControl resolves the control hosts. An IP literal needs no DNS.
+// The answer holds the /24s of every host that resolved, and it is complete
+// only when all of them did. The error joins the failed lookups.
+func resolveControl(ctx context.Context, lookup lookupFunc, hosts []string) (underlay.Control, error) {
 	ctx, cancel := context.WithTimeout(ctx, dnsTimeout)
 	defer cancel()
 	var addrs []netip.Addr
+	var errs []error
 	for _, h := range hosts {
 		if a, err := netip.ParseAddr(h); err == nil {
 			addrs = append(addrs, a)
@@ -58,9 +58,11 @@ func resolveControl(ctx context.Context, lookup lookupFunc, hosts []string) ([]n
 		}
 		as, err := lookup(ctx, "ip4", h)
 		if err != nil {
-			return nil, fmt.Errorf("resolving %s: %w", h, err)
+			errs = append(errs, fmt.Errorf("resolving %s: %w", h, err))
+			continue
 		}
 		addrs = append(addrs, as...)
 	}
-	return underlay.ControlPrefixes(addrs), nil
+	c := underlay.Control{Prefixes: underlay.ControlPrefixes(addrs), Complete: len(errs) == 0}
+	return c, errors.Join(errs...)
 }
