@@ -36,6 +36,9 @@ var (
 
 var equateIP = cmpopts.EquateComparable(netip.Addr{}, netip.Prefix{})
 
+// answered is the Control of a run in which every host resolved.
+func answered(ps ...netip.Prefix) Control { return Control{Prefixes: ps, Complete: true} }
+
 func pfx(s string) netip.Prefix { return netip.MustParsePrefix(s) }
 
 func notOwned(r Route) Route {
@@ -106,7 +109,7 @@ func TestDeriveFacts(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := DeriveFacts(tt.table, []netip.Prefix{ctl})
+			got := DeriveFacts(tt.table, answered(ctl))
 			if diff := cmp.Diff(tt.wantLAN, got.LAN, equateIP); diff != "" {
 				t.Errorf("LAN (-want +got):\n%s", diff)
 			}
@@ -118,41 +121,41 @@ func TestDeriveFacts(t *testing.T) {
 }
 
 func TestPlan(t *testing.T) {
-	one := []netip.Prefix{ctl}
+
 	tests := []struct {
 		name    string
 		table   []Route
-		control []netip.Prefix
+		control Control
 		want    []Action
 	}{
 		{
 			name:    "adds R2 and R1 when the VPN comes up",
 			table:   astrill(),
-			control: []netip.Prefix{ctl, ctl2},
+			control: answered(ctl, ctl2),
 			want:    []Action{Add{r2}, Add{r1}, Add{r1Second}},
 		},
 		{
 			name:    "no change on a correct table",
 			table:   astrill(r2, r1),
-			control: one,
+			control: answered(ctl),
 			want:    nil,
 		},
 		{
 			name:    "routes that the operator added count, and are not deleted",
 			table:   astrill(notOwned(r2), notOwned(r1)),
-			control: one,
+			control: answered(ctl),
 			want:    nil,
 		},
 		{
 			name:    "adds R2 again after a VPN reconnect deleted it",
 			table:   astrill(r1),
-			control: one,
+			control: answered(ctl),
 			want:    []Action{Add{r2}},
 		},
 		{
 			name:    "replaces R1 after a LAN gateway change, deletes first",
 			table:   append([]Route{{Dst: pfx("0.0.0.0/0"), Iface: "en0", Via: newLanGw}, tsScoped, vpnLow, vpnHigh}, r2, r1),
-			control: one,
+			control: answered(ctl),
 			want: []Action{
 				Delete{r1},
 				Add{Route{Dst: ctl, Iface: "en0", Scoped: true, Via: newLanGw, Owned: true}},
@@ -161,13 +164,13 @@ func TestPlan(t *testing.T) {
 		{
 			name:    "keeps owned R1 when DNS gave no answer",
 			table:   astrill(r2, r1, r1Second),
-			control: nil,
+			control: Control{},
 			want:    nil,
 		},
 		{
 			name:    "moves kept R1 to the new LAN gateway when DNS gave no answer",
 			table:   append([]Route{{Dst: pfx("0.0.0.0/0"), Iface: "en0", Via: newLanGw}, vpnLow, vpnHigh}, r2, r1),
-			control: nil,
+			control: Control{},
 			want: []Action{
 				Delete{r1},
 				Add{Route{Dst: ctl, Iface: "en0", Scoped: true, Via: newLanGw, Owned: true}},
@@ -176,25 +179,37 @@ func TestPlan(t *testing.T) {
 		{
 			name:    "does not keep R1 that the operator added when DNS gave no answer",
 			table:   astrill(r2, notOwned(r1)),
-			control: nil,
+			control: Control{},
 			want:    nil,
+		},
+		{
+			name:    "adds the routes of the hosts that resolved when another host gave no answer",
+			table:   astrill(r2),
+			control: Control{Prefixes: []netip.Prefix{ctl}},
+			want:    []Action{Add{r1}},
+		},
+		{
+			name:    "keeps owned R1 of a host that gave no answer, and adds the others",
+			table:   astrill(r2, r1Second),
+			control: Control{Prefixes: []netip.Prefix{ctl}},
+			want:    []Action{Add{r1}},
 		},
 		{
 			name:    "follows a control plane that moved to a new /24",
 			table:   astrill(r2, r1),
-			control: []netip.Prefix{ctl2},
+			control: answered(ctl2),
 			want:    []Action{Delete{r1}, Add{r1Second}},
 		},
 		{
 			name:    "deletes only owned routes when the VPN goes down",
 			table:   []Route{lanDefault, lanSubnet, tsScoped, r2, r1, notOwned(r1Second)},
-			control: one,
+			control: answered(ctl),
 			want:    []Action{Delete{r2}, Delete{r1}},
 		},
 		{
 			name:    "adds only R2 and deletes R1 when there is no LAN",
 			table:   []Route{tsScoped, vpnLow, vpnHigh, vpnSubnet, r1},
-			control: one,
+			control: answered(ctl),
 			want:    []Action{Delete{r1}, Add{r2}},
 		},
 		{
@@ -204,7 +219,7 @@ func TestPlan(t *testing.T) {
 				{Dst: pfx("0.0.0.0/1"), Iface: "utun5"},
 				{Dst: pfx("128.0.0.0/1"), Iface: "utun5"},
 			},
-			control: one,
+			control: answered(ctl),
 			want:    []Action{Add{r1}},
 		},
 		{
@@ -215,7 +230,7 @@ func TestPlan(t *testing.T) {
 				{Dst: pfx("128.0.0.0/1"), Iface: "utun8", Via: vpnGw},
 				r2, r1,
 			},
-			control: one,
+			control: answered(ctl),
 			want:    []Action{Delete{r2}, Add{Route{Dst: r2.Dst, Iface: "utun8", Owned: true}}},
 		},
 		{
@@ -225,7 +240,7 @@ func TestPlan(t *testing.T) {
 				{Dst: pfx("128.0.0.0/1"), Iface: "utun7", Via: netip.MustParseAddr("10.8.0.1")},
 				r2, r1,
 			},
-			control: one,
+			control: answered(ctl),
 			want:    nil,
 		},
 	}

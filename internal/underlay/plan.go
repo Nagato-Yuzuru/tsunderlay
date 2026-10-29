@@ -74,18 +74,20 @@ func desired(f Facts) []Route {
 	return want
 }
 
-// controlPrefixes returns f.Control. When DNS gave no answer, it returns the
-// destinations of the owned scoped routes instead: absence of an answer is
-// not evidence that they are stale.
+// controlPrefixes returns the resolved prefixes. When a host gave no answer,
+// it adds the destinations of the owned scoped routes: absence of an answer
+// is not evidence that they are stale. A route records no host, so it keeps
+// all of them. The hosts that resolved still get their routes, so a wrong
+// URL does not block the others.
 func controlPrefixes(f Facts) []netip.Prefix {
-	if len(f.Control) > 0 {
-		return f.Control
+	ps := slices.Clone(f.Control.Prefixes)
+	if f.Control.Complete {
+		return ps
 	}
-	var kept []netip.Prefix
 	for _, r := range f.Table {
-		if r.Owned && r.Scoped && !slices.Contains(kept, r.Dst) {
-			kept = append(kept, r.Dst)
+		if r.Owned && r.Scoped && !slices.Contains(ps, r.Dst) {
+			ps = append(ps, r.Dst)
 		}
 	}
-	return kept
+	return ps
 }

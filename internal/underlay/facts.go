@@ -10,13 +10,19 @@ type Facts struct {
 	// LAN is the global default route on a physical interface. It is nil
 	// when there is no such route, for example when Wi-Fi is off, or when a
 	// VPN replaced the global default.
-	LAN *Link
-	VPN VPN
-	// Control holds the /24s of the resolved control-plane addresses. It is
-	// empty when DNS gave no answer. A resolver that succeeds always returns
-	// at least one address, so empty never means "no control plane".
-	Control []netip.Prefix
+	LAN     *Link
+	VPN     VPN
+	Control Control
 	Table   []Route
+}
+
+// Control is the answer for the control hosts.
+type Control struct {
+	// Prefixes holds the /24s of the hosts that DNS resolved.
+	Prefixes []netip.Prefix
+	// Complete is true when every host gave an answer. When a host gave no
+	// answer, its routes are unknown, so Plan keeps the owned control routes.
+	Complete bool
 }
 
 // VPN is the full-tunnel state that the global routes show.
@@ -39,9 +45,9 @@ func (NoVPN) isVPN()        {}
 func (SplitDefault) isVPN() {}
 func (Ambiguous) isVPN()    {}
 
-// DeriveFacts reads the LAN and VPN state from the routing table. control
-// is the list of control-plane /24s, empty if DNS failed.
-func DeriveFacts(table []Route, control []netip.Prefix) Facts {
+// DeriveFacts reads the LAN and VPN state from the routing table, and adds
+// the control answer.
+func DeriveFacts(table []Route, control Control) Facts {
 	var lan *Link
 	var low, high *Route
 	for i, r := range table {
