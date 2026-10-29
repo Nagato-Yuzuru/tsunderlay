@@ -40,10 +40,9 @@ func report(f underlay.Facts, hosts []string, dnsErr error, plan []underlay.Acti
 		"lan:     " + lan(f.LAN),
 		"vpn:     " + vpn(f.VPN),
 	}
+	lines = append(lines, fmt.Sprintf("control: %s -> %s", strings.Join(hosts, ", "), joinPrefixes(f.Control.Prefixes)))
 	if dnsErr != nil {
-		lines = append(lines, fmt.Sprintf("control: %s: no answer (%v); owned control routes stay", strings.Join(hosts, ", "), dnsErr))
-	} else {
-		lines = append(lines, fmt.Sprintf("control: %s -> %s", strings.Join(hosts, ", "), joinPrefixes(f.Control)))
+		lines = append(lines, fmt.Sprintf("         no answer: %v; owned control routes stay", strings.ReplaceAll(dnsErr.Error(), "\n", "; ")))
 	}
 	if len(plan) == 0 {
 		lines = append(lines, "plan:    none")
@@ -98,6 +97,9 @@ func hop(r underlay.Route) string {
 }
 
 func joinPrefixes(ps []netip.Prefix) string {
+	if len(ps) == 0 {
+		return "none"
+	}
 	s := make([]string, len(ps))
 	for i, p := range ps {
 		s[i] = p.String()

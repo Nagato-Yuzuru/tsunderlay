@@ -8,6 +8,8 @@ import (
 	"net/netip"
 	"slices"
 	"testing"
+
+	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
 )
 
 func TestControlHosts(t *testing.T) {
@@ -62,26 +64,26 @@ func TestResolveControl(t *testing.T) {
 	tests := []struct {
 		name      string
 		hosts     []string
-		want      []netip.Prefix
+		want      underlay.Control
 		wantErr   bool
 		wantAsked []string
 	}{
 		{
 			name:      "addresses of all hosts, as sorted /24s",
 			hosts:     []string{"hs.example.com", "controlplane.tailscale.com"},
-			want:      []netip.Prefix{pfx("192.200.0.0/24"), pfx("198.51.100.0/24")},
+			want:      underlay.Control{Prefixes: []netip.Prefix{pfx("192.200.0.0/24"), pfx("198.51.100.0/24")}, Complete: true},
 			wantAsked: []string{"hs.example.com", "controlplane.tailscale.com"},
 		},
 		{
 			name:      "an IP literal needs no lookup",
 			hosts:     []string{"203.0.113.7"},
-			want:      []netip.Prefix{pfx("203.0.113.0/24")},
+			want:      underlay.Control{Prefixes: []netip.Prefix{pfx("203.0.113.0/24")}, Complete: true},
 			wantAsked: nil,
 		},
 		{
-			name:      "one failed lookup gives no prefixes at all",
+			name:      "a failed lookup makes the answer incomplete, and the other hosts still count",
 			hosts:     []string{"controlplane.tailscale.com", "down.example.com"},
-			want:      nil,
+			want:      underlay.Control{Prefixes: []netip.Prefix{pfx("192.200.0.0/24")}},
 			wantErr:   true,
 			wantAsked: []string{"controlplane.tailscale.com", "down.example.com"},
 		},
@@ -93,7 +95,7 @@ func TestResolveControl(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("resolveControl error = %v, want error %t", err, tt.wantErr)
 			}
-			if !slices.Equal(got, tt.want) {
+			if got.Complete != tt.want.Complete || !slices.Equal(got.Prefixes, tt.want.Prefixes) {
 				t.Errorf("resolveControl = %v, want %v", got, tt.want)
 			}
 			if !slices.Equal(asked, tt.wantAsked) {
