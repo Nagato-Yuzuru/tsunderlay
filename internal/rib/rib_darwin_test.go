@@ -1,7 +1,9 @@
 package rib
 
 import (
+	"errors"
 	"net/netip"
+	"os"
 	"syscall"
 	"testing"
 
@@ -91,6 +93,38 @@ func TestParse(t *testing.T) {
 			got := Parse([]route.Message{tt.msg}, names)
 			if diff := cmp.Diff(tt.want, got, cmpopts.EquateComparable(netip.Addr{}, netip.Prefix{})); diff != "" {
 				t.Errorf("Parse (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestFetchRetry(t *testing.T) {
+	grown := os.NewSyscallError("sysctl", syscall.ENOMEM)
+	other := os.NewSyscallError("sysctl", syscall.EPERM)
+	tests := []struct {
+		name      string
+		errs      []error // the result of each read; nil means success
+		wantErr   error
+		wantReads int
+	}{
+		{name: "success at once", errs: []error{nil}, wantReads: 1},
+		{name: "a grown table is read again", errs: []error{grown, grown, nil}, wantReads: 3},
+		{name: "another error is not retried", errs: []error{other}, wantErr: syscall.EPERM, wantReads: 1},
+		{name: "a table that keeps growing fails after the last attempt", errs: []error{grown, grown, grown, grown, grown}, wantErr: syscall.ENOMEM, wantReads: fetchAttempts},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reads := 0
+			_, err := fetchRetry(func() ([]byte, error) {
+				err := tt.errs[reads]
+				reads++
+				return nil, err
+			})
+			if reads != tt.wantReads {
+				t.Errorf("reads = %d, want %d", reads, tt.wantReads)
+			}
+			if tt.wantErr == nil && err != nil || tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("err = %v, want %v", err, tt.wantErr)
 			}
 		})
 	}

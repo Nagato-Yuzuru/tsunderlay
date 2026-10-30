@@ -2,6 +2,7 @@
 package rib
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -16,7 +17,9 @@ import (
 // each call, because a VPN reconnect gives a utun with the same name a new
 // index.
 func Fetch() ([]underlay.Route, error) {
-	b, err := route.FetchRIB(syscall.AF_INET, route.RIBTypeRoute, 0)
+	b, err := fetchRetry(func() ([]byte, error) {
+		return route.FetchRIB(syscall.AF_INET, route.RIBTypeRoute, 0)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("reading the routing table: %w", err)
 	}
@@ -33,6 +36,23 @@ func Fetch() ([]underlay.Route, error) {
 		names[i.Index] = i.Name
 	}
 	return Parse(msgs, names), nil
+}
+
+// fetchAttempts bounds the reads of fetchRetry.
+const fetchAttempts = 5
+
+// fetchRetry calls read again when it fails with ENOMEM. sysctl NET_RT_DUMP
+// asks for the size, then reads; when the table grows between the two, the
+// read fails with ENOMEM. A VPN reconnect does this on the development Mac.
+func fetchRetry(read func() ([]byte, error)) ([]byte, error) {
+	var err error
+	for range fetchAttempts {
+		var b []byte
+		if b, err = read(); !errors.Is(err, syscall.ENOMEM) {
+			return b, err
+		}
+	}
+	return nil, err
 }
 
 // Parse converts route messages to routes. names maps interface indexes to
