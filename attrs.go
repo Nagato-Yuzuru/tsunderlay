@@ -23,6 +23,7 @@ const (
 	triggerStart      = "start"
 	triggerRouteEvent = "route-event"
 	triggerBackstop   = "backstop"
+	triggerRetry      = "retry"
 )
 
 // Values of error.type.

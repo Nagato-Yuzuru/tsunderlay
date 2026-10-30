@@ -23,15 +23,26 @@ const (
 	// backstop is the longest time between two reconciles. It repairs a
 	// change that sent no route message.
 	backstop = 5 * time.Minute
+	// retryMin and retryMax bound the wait before a plan is applied again
+	// when the last try left the table unchanged.
+	retryMin = time.Second
+	retryMax = time.Minute
 )
 
-// loop calls reconcile at start, after route messages, and at each backstop
-// tick, until ctx ends.
-func loop(ctx context.Context, wake <-chan struct{}, reconcile func(context.Context, string)) {
-	reconcile(ctx, triggerStart)
+// loop calls reconcile at start, after route messages, at each backstop
+// tick, and when a reconcile asks for a retry, until ctx ends. reconcile
+// returns the wait before the retry, or 0 for no retry.
+func loop(ctx context.Context, wake <-chan struct{}, reconcile func(context.Context, string) time.Duration) {
+	var fire, retry <-chan time.Time
+	schedule := func(wait time.Duration) {
+		retry = nil
+		if wait > 0 {
+			retry = time.After(wait)
+		}
+	}
+	schedule(reconcile(ctx, triggerStart))
 	tick := time.NewTicker(backstop)
 	defer tick.Stop()
-	var fire <-chan time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -42,9 +53,11 @@ func loop(ctx context.Context, wake <-chan struct{}, reconcile func(context.Cont
 			}
 		case <-fire:
 			fire = nil
-			reconcile(ctx, triggerRouteEvent)
+			schedule(reconcile(ctx, triggerRouteEvent))
+		case <-retry:
+			schedule(reconcile(ctx, triggerRetry))
 		case <-tick.C:
-			reconcile(ctx, triggerBackstop)
+			schedule(reconcile(ctx, triggerBackstop))
 		}
 	}
 }
@@ -62,6 +75,10 @@ type daemon struct {
 	// lastApplied is the plan that the last reconcile applied, as command
 	// lines. Empty when the last plan was empty.
 	lastApplied string
+	// retryDelay is the wait after the last try of lastApplied, and retryAt
+	// is the earliest time of the next try.
+	retryDelay time.Duration
+	retryAt    time.Time
 }
 
 // actionResult is one applied action in the reconcile event.
@@ -71,8 +88,9 @@ type actionResult struct {
 }
 
 // reconcile reads the state, applies the plan, and emits one event when it
-// applied an action or failed. A run on a correct table emits nothing.
-func (d *daemon) reconcile(ctx context.Context, trigger string) {
+// applied an action or failed. A run on a correct table emits nothing. It
+// returns the wait before the next try when it applied a plan, or 0.
+func (d *daemon) reconcile(ctx context.Context, trigger string) time.Duration {
 	start := time.Now()
 	table, err := d.fetch()
 	if err != nil {
@@ -80,24 +98,32 @@ func (d *daemon) reconcile(ctx context.Context, trigger string) {
 			slog.String(attrTrigger, trigger),
 			slog.String(string(semconv.ErrorTypeKey), errTypeRIB),
 			slog.String("error", err.Error()))
-		return
+		return 0
 	}
 	control, dnsErr := resolveControl(ctx, d.lookup, d.hosts)
 	f := underlay.DeriveFacts(table, control)
 	plan := underlay.Plan(f)
-	applied := planLines(plan)
+	lines := planLines(plan)
 	// The last reconcile applied this plan, and the table still needs it: the
-	// plan has no effect. Each try makes route messages, which would repeat
-	// it each second. The backstop tries it again.
-	noEffect := trigger == triggerRouteEvent && applied != "" && applied == d.lastApplied
-	d.warnOnChange(ctx, f, dnsErr, underlay.Blocks(f), noEffect, applied)
+	// try had no effect, for example because the new tunnel was not ready.
+	// Each try makes route messages, so a try at each message would repeat
+	// it each second. The tries back off instead, and loop wakes for each.
+	noEffect := lines != "" && lines == d.lastApplied
+	d.warnOnChange(ctx, f, dnsErr, underlay.Blocks(f), noEffect, lines)
+	if lines == "" {
+		d.lastApplied, d.retryDelay = "", 0
+		return 0
+	}
 	if noEffect {
-		return
+		if wait := d.retryAt.Sub(start); wait > 0 {
+			return wait
+		}
+		d.retryDelay = min(2*d.retryDelay, retryMax)
+	} else {
+		d.retryDelay = retryMin
 	}
-	d.lastApplied = applied
-	if len(plan) == 0 {
-		return
-	}
+	d.lastApplied, d.retryAt = lines, start.Add(d.retryDelay)
+
 	level := slog.LevelInfo
 	results := make([]actionResult, 0, len(plan))
 	for _, a := range plan {
@@ -119,9 +145,10 @@ func (d *daemon) reconcile(ctx context.Context, trigger string) {
 	if level == slog.LevelError {
 		attrs = append(attrs, slog.String(string(semconv.ErrorTypeKey), errTypeRoute))
 		d.log.LogAttrs(ctx, level, "route change failed", attrs...)
-		return
+		return d.retryDelay
 	}
 	d.log.LogAttrs(ctx, level, "routes changed", attrs...)
+	return d.retryDelay
 }
 
 // warnOnChange logs a degraded state when it starts or changes, and logs

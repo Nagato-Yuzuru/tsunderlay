@@ -18,11 +18,21 @@ import (
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
 )
 
-// recorder records the triggers of the reconciles that loop calls.
-type recorder struct{ triggers []string }
+// recorder records the triggers of the reconciles that loop calls. Each
+// reconcile returns the next value of waits, then 0.
+type recorder struct {
+	triggers []string
+	waits    []time.Duration
+}
 
-func (r *recorder) reconcile(_ context.Context, trigger string) {
+func (r *recorder) reconcile(_ context.Context, trigger string) time.Duration {
 	r.triggers = append(r.triggers, trigger)
+	if len(r.waits) == 0 {
+		return 0
+	}
+	w := r.waits[0]
+	r.waits = r.waits[1:]
+	return w
 }
 
 func TestLoop(t *testing.T) {
@@ -30,6 +40,7 @@ func TestLoop(t *testing.T) {
 		name string
 		// drive sends route messages and moves the fake clock.
 		drive func(wake chan<- struct{})
+		waits []time.Duration
 		want  []string
 	}{
 		{
@@ -59,6 +70,12 @@ func TestLoop(t *testing.T) {
 			want: []string{triggerStart, triggerRouteEvent, triggerRouteEvent, triggerRouteEvent},
 		},
 		{
+			name:  "retries after the wait that a reconcile returns, without a route message",
+			drive: func(chan<- struct{}) { time.Sleep(3 * time.Second) },
+			waits: []time.Duration{time.Second, 2 * time.Second},
+			want:  []string{triggerStart, triggerRetry, triggerRetry},
+		},
+		{
 			name:  "reconciles at the backstop without route messages",
 			drive: func(chan<- struct{}) { time.Sleep(backstop) },
 			want:  []string{triggerStart, triggerBackstop},
@@ -69,7 +86,7 @@ func TestLoop(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				wake := make(chan struct{})
-				var r recorder
+				r := recorder{waits: tt.waits}
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
@@ -218,30 +235,67 @@ func TestReconcileLastingDNSFailureWarnsOnce(t *testing.T) {
 	}
 }
 
-func TestReconcilePlanWithoutEffectIsNotRepeatedOnRouteEvents(t *testing.T) {
-	var b bytes.Buffer
-	// apply does not change the table, like an add that the kernel refuses
-	// with "File exists".
-	h := &fakeHost{table: append(slices.Clone(astrillTable), r1)}
-	d := h.daemon(slog.New(slog.NewJSONHandler(&b, nil)))
-	d.reconcile(t.Context(), triggerStart)
-	for range 3 {
-		d.reconcile(t.Context(), triggerRouteEvent)
-	}
-	if len(h.applied) != 1 {
-		t.Fatalf("applied %d times after start and 3 route events, want 1", len(h.applied))
-	}
-	var levels []any
-	for _, e := range events(t, &b) {
-		levels = append(levels, e["level"])
-	}
-	if want := []any{"INFO", "WARN"}; !slices.Equal(levels, want) {
-		t.Errorf("levels = %v, want %v (one change, one warning)", levels, want)
-	}
-	d.reconcile(t.Context(), triggerBackstop)
-	if len(h.applied) != 2 {
-		t.Errorf("applied %d times after the backstop, want 2", len(h.applied))
-	}
+func TestReconcileBacksOffAPlanWithoutEffect(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var b bytes.Buffer
+		// apply does not change the table, like a try that the kernel
+		// refuses.
+		h := &fakeHost{table: append(slices.Clone(astrillTable), r1)}
+		d := h.daemon(slog.New(slog.NewJSONHandler(&b, nil)))
+		var waits []time.Duration
+		// A route message each 100 ms for 10 s, as the tries themselves make.
+		for range 100 {
+			if w := d.reconcile(t.Context(), triggerRouteEvent); w > 0 {
+				waits = append(waits, w)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		// Tries at 0 s, 1 s, 3 s, and 7 s: the waits double from retryMin.
+		if len(h.applied) != 4 {
+			t.Errorf("applied %d times in 10 s, want 4", len(h.applied))
+		}
+		if waits[0] != time.Second {
+			t.Errorf("first wait = %v, want 1s", waits[0])
+		}
+		var warns int
+		for _, e := range events(t, &b) {
+			if e["level"] == "WARN" {
+				warns++
+			}
+		}
+		if warns != 1 {
+			t.Errorf("WARN events = %d, want 1", warns)
+		}
+	})
+}
+
+func TestReconcileRetriesSoonWhenTheFirstTryHadNoEffect(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var b bytes.Buffer
+		// The first add of R2 has no effect: the new tunnel is not ready.
+		// The second one works.
+		h := &fakeHost{table: append(slices.Clone(astrillTable), r1)}
+		d := h.daemon(slog.New(slog.NewJSONHandler(&b, nil)))
+		d.apply = func(_ context.Context, a underlay.Action) error {
+			h.applied = append(h.applied, a)
+			if len(h.applied) == 2 {
+				h.table = append(h.table, r2)
+			}
+			return nil
+		}
+		// The goal is a repair within about 1 s of the event.
+		wait := d.reconcile(t.Context(), triggerRouteEvent)
+		if wait != time.Second {
+			t.Fatalf("wait after the first try = %v, want 1s", wait)
+		}
+		time.Sleep(wait)
+		if w := d.reconcile(t.Context(), triggerRetry); len(h.applied) != 2 {
+			t.Fatalf("applied %d times after the retry, want 2 (wait %v)", len(h.applied), w)
+		}
+		if w := d.reconcile(t.Context(), triggerRouteEvent); w != 0 || len(h.applied) != 2 {
+			t.Errorf("after the table caught up: wait %v, applied %d; want 0 and 2", w, len(h.applied))
+		}
+	})
 }
 
 func TestReconcileBlockedRouteWarnsOnceAndAddsNothing(t *testing.T) {
