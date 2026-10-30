@@ -32,6 +32,11 @@ func Args(a underlay.Action) []string {
 	}
 }
 
+// Line returns the command line of a, for logs and for a manual repair.
+func Line(a underlay.Action) string {
+	return Path + " " + strings.Join(Args(a), " ")
+}
+
 // target returns the destination part of the arguments. The kernel keys a
 // route by destination and scope, so a delete does not need the gateway.
 func target(r underlay.Route, withGateway bool) []string {
