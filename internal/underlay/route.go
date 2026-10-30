@@ -26,6 +26,12 @@ func (r Route) sameRoute(o Route) bool {
 	return r == o
 }
 
+// sameKey reports whether the kernel keys r and o as one route: the same
+// destination and the same scope. A global route has no scope interface.
+func (r Route) sameKey(o Route) bool {
+	return r.Dst == o.Dst && r.Scoped == o.Scoped && (!r.Scoped || r.Iface == o.Iface)
+}
+
 // Link is an interface with its next hop.
 type Link struct {
 	Iface   string

@@ -20,14 +20,32 @@ func (Add) isAction()    {}
 func (Delete) isAction() {}
 
 // Plan returns the actions that add the routes that the facts need, and that
-// delete the owned routes that they do not need. All deletes come before all adds: the kernel keys a route
-// by destination and scope, so a route with a new next hop must replace the
-// old one. On a table that is already correct, Plan returns no actions.
+// delete the owned routes that they do not need. All deletes come before all
+// adds: the kernel keys a route by destination and scope, so a route with a
+// new next hop must replace the old one. On a table that is already correct,
+// Plan returns no actions. Plan does not add a route that Blocks reports.
 func Plan(f Facts) []Action {
+	actions, _ := plan(f)
+	return actions
+}
+
+// Blocked is a route that the facts need, but a route of the operator holds
+// its key with another next hop. The kernel refuses the add ("File exists"),
+// and tsunderlay does not delete a route that it does not own, so the
+// operator must delete By.
+type Blocked struct{ Want, By Route }
+
+// Blocks returns the routes that Plan cannot add.
+func Blocks(f Facts) []Blocked {
+	_, blocked := plan(f)
+	return blocked
+}
+
+func plan(f Facts) ([]Action, []Blocked) {
 	if _, ok := f.VPN.(Ambiguous); ok {
 		// A wrong guess sends Tailscale through the wrong tunnel, which is
 		// worse than no change.
-		return nil
+		return nil, nil
 	}
 	want := desired(f)
 
@@ -37,12 +55,19 @@ func Plan(f Facts) []Action {
 			actions = append(actions, Delete{Route: r})
 		}
 	}
+	var blocked []Blocked
 	for _, r := range want {
-		if !slices.ContainsFunc(f.Table, r.sameRoute) {
-			actions = append(actions, Add{Route: r})
+		if slices.ContainsFunc(f.Table, r.sameRoute) {
+			continue
 		}
+		// An owned route with the same key is deleted above.
+		if i := slices.IndexFunc(f.Table, func(o Route) bool { return !o.Owned && r.sameKey(o) }); i >= 0 {
+			blocked = append(blocked, Blocked{Want: r, By: f.Table[i]})
+			continue
+		}
+		actions = append(actions, Add{Route: r})
 	}
-	return actions
+	return actions, blocked
 }
 
 func desired(f Facts) []Route {

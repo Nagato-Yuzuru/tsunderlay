@@ -26,16 +26,16 @@ func check(ctx context.Context, w io.Writer, hosts []string) error {
 	f := underlay.DeriveFacts(table, control)
 	plan := underlay.Plan(f)
 
-	if _, err := io.WriteString(w, report(f, hosts, dnsErr, plan)); err != nil {
+	if _, err := io.WriteString(w, report(f, hosts, dnsErr, plan, underlay.Blocks(f))); err != nil {
 		return fmt.Errorf("writing the report: %w", err)
 	}
-	if code := status(f, dnsErr, plan); code != 0 {
+	if code := status(f, dnsErr, plan, underlay.Blocks(f)); code != 0 {
 		return exitCode(code)
 	}
 	return nil
 }
 
-func report(f underlay.Facts, hosts []string, dnsErr error, plan []underlay.Action) string {
+func report(f underlay.Facts, hosts []string, dnsErr error, plan []underlay.Action, blocked []underlay.Blocked) string {
 	lines := []string{
 		"lan:     " + lan(f.LAN),
 		"vpn:     " + vpn(f.VPN),
@@ -44,22 +44,25 @@ func report(f underlay.Facts, hosts []string, dnsErr error, plan []underlay.Acti
 	if dnsErr != nil {
 		lines = append(lines, fmt.Sprintf("         no answer: %v; owned control routes stay", strings.ReplaceAll(dnsErr.Error(), "\n", "; ")))
 	}
+	for _, b := range blockedLines(blocked) {
+		lines = append(lines, "blocked: "+b)
+	}
 	if len(plan) == 0 {
 		lines = append(lines, "plan:    none")
 	} else {
 		lines = append(lines, "plan:")
 		for _, a := range plan {
-			lines = append(lines, "  "+routecmd.Path+" "+strings.Join(routecmd.Args(a), " "))
+			lines = append(lines, "  "+routecmd.Line(a))
 		}
 	}
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// status is the exit code of check. Two states have no plan, but are not
-// healthy: an ambiguous VPN state (Tailscale may use either tunnel), and a
-// DNS failure (check cannot confirm the control routes).
-func status(f underlay.Facts, dnsErr error, plan []underlay.Action) int {
-	if _, ok := f.VPN.(underlay.Ambiguous); ok || dnsErr != nil || len(plan) > 0 {
+// status is the exit code of check. Three states have no plan, but are not
+// healthy: an ambiguous VPN state (Tailscale may use either tunnel), a DNS
+// failure (check cannot confirm the control routes), and a blocked route.
+func status(f underlay.Facts, dnsErr error, plan []underlay.Action, blocked []underlay.Blocked) int {
+	if _, ok := f.VPN.(underlay.Ambiguous); ok || dnsErr != nil || len(plan) > 0 || len(blocked) > 0 {
 		return 1
 	}
 	return 0
@@ -105,4 +108,15 @@ func joinPrefixes(ps []netip.Prefix) string {
 		s[i] = p.String()
 	}
 	return strings.Join(s, ", ")
+}
+
+// blockedLines describes each blocked route with the command that removes
+// the operator route.
+func blockedLines(blocked []underlay.Blocked) []string {
+	lines := make([]string, len(blocked))
+	for i, b := range blocked {
+		lines[i] = fmt.Sprintf("%s is held by a route that tsunderlay does not own (%s); delete it: %s",
+			b.Want.Dst, link(underlay.Link{Iface: b.By.Iface, Gateway: b.By.Via}), routecmd.Line(underlay.Delete{Route: b.By}))
+	}
+	return lines
 }

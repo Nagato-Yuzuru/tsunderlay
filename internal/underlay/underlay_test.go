@@ -29,6 +29,10 @@ var (
 	vpnSubnet = Route{Dst: pfx("198.18.64.0/20"), Iface: "utun5"}
 	lanSubnet = Route{Dst: pfx("192.168.2.0/24"), Iface: "en0"}
 
+	// Routes that the operator added by hand on another network.
+	staleOperatorR1 = Route{Dst: ctl, Iface: "en0", Scoped: true, Via: newLanGw}
+	staleOperatorR2 = Route{Dst: pfx("198.18.64.1/32"), Iface: "utun5", Via: netip.MustParseAddr("198.18.64.173")}
+
 	r2       = Route{Dst: pfx("198.18.64.1/32"), Iface: "utun5", Owned: true}
 	r1       = Route{Dst: ctl, Iface: "en0", Scoped: true, Via: lanGw, Owned: true}
 	r1Second = Route{Dst: ctl2, Iface: "en0", Scoped: true, Via: lanGw, Owned: true}
@@ -243,6 +247,30 @@ func TestPlan(t *testing.T) {
 			control: answered(ctl),
 			want:    nil,
 		},
+		{
+			name:    "does not add R1 when an operator route holds its key with another gateway",
+			table:   astrill(r2, staleOperatorR1),
+			control: answered(ctl),
+			want:    nil,
+		},
+		{
+			name:    "does not add R2 when an operator route holds its key with another next hop",
+			table:   astrill(r1, staleOperatorR2),
+			control: answered(ctl),
+			want:    nil,
+		},
+		{
+			name:    "replaces an owned R1 with another gateway: an owned route never blocks",
+			table:   astrill(r2, Route{Dst: ctl, Iface: "en0", Scoped: true, Via: newLanGw, Owned: true}),
+			control: answered(ctl),
+			want:    []Action{Delete{Route{Dst: ctl, Iface: "en0", Scoped: true, Via: newLanGw, Owned: true}}, Add{r1}},
+		},
+		{
+			name:    "a route with the same destination on another scope does not block",
+			table:   astrill(r2, Route{Dst: ctl, Iface: "en1", Scoped: true, Via: newLanGw}),
+			control: answered(ctl),
+			want:    []Action{Add{r1}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -251,5 +279,19 @@ func TestPlan(t *testing.T) {
 				t.Errorf("Plan (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestBlocks(t *testing.T) {
+	f := DeriveFacts(astrill(staleOperatorR1, staleOperatorR2), answered(ctl))
+	want := []Blocked{
+		{Want: r2, By: staleOperatorR2},
+		{Want: r1, By: staleOperatorR1},
+	}
+	if diff := cmp.Diff(want, Blocks(f), equateIP); diff != "" {
+		t.Errorf("Blocks (-want +got):\n%s", diff)
+	}
+	if got := Blocks(DeriveFacts(astrill(r1, r2), answered(ctl))); got != nil {
+		t.Errorf("Blocks on a correct table = %v, want none", got)
 	}
 }
