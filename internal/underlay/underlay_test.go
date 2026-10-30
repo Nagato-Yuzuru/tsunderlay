@@ -29,9 +29,11 @@ var (
 	vpnSubnet = Route{Dst: pfx("198.18.64.0/20"), Iface: "utun5"}
 	lanSubnet = Route{Dst: pfx("192.168.2.0/24"), Iface: "en0"}
 
-	// Routes that the operator added by hand on another network.
-	staleOperatorR1 = Route{Dst: ctl, Iface: "en0", Scoped: true, Via: newLanGw}
-	staleOperatorR2 = Route{Dst: pfx("198.18.64.1/32"), Iface: "utun5", Via: netip.MustParseAddr("198.18.64.173")}
+	// Routes that the operator added by hand. The stale one has a next hop
+	// of another network; the working ones have a next hop on the link.
+	staleOperatorR1   = Route{Dst: ctl, Iface: "en0", Scoped: true, Via: newLanGw}
+	workingOperatorR1 = Route{Dst: ctl, Iface: "en0", Scoped: true, Via: netip.MustParseAddr("192.168.2.254")}
+	workingOperatorR2 = Route{Dst: pfx("198.18.64.1/32"), Iface: "utun5", Via: netip.MustParseAddr("198.18.64.173")}
 
 	r2       = Route{Dst: pfx("198.18.64.1/32"), Iface: "utun5", Owned: true}
 	r1       = Route{Dst: ctl, Iface: "en0", Scoped: true, Via: lanGw, Owned: true}
@@ -248,14 +250,26 @@ func TestPlan(t *testing.T) {
 			want:    nil,
 		},
 		{
-			name:    "does not add R1 when an operator route holds its key with another gateway",
-			table:   astrill(r2, staleOperatorR1),
+			name:    "does not add R1 when a working operator route holds its key with another gateway",
+			table:   astrill(r2, workingOperatorR1),
 			control: answered(ctl),
 			want:    nil,
 		},
 		{
-			name:    "does not add R2 when an operator route holds its key with another next hop",
-			table:   astrill(r1, staleOperatorR2),
+			name:    "does not add R2 when a working operator route holds its key with another next hop",
+			table:   astrill(r1, workingOperatorR2),
+			control: answered(ctl),
+			want:    nil,
+		},
+		{
+			name:    "replaces an operator R1 whose gateway is on no link of the interface, deletes first",
+			table:   astrill(r2, staleOperatorR1),
+			control: answered(ctl),
+			want:    []Action{Delete{staleOperatorR1}, Add{r1}},
+		},
+		{
+			name:    "does not delete a stale operator route that holds no key that the plan needs",
+			table:   astrill(r1, r2, Route{Dst: pfx("203.0.113.0/24"), Iface: "en0", Scoped: true, Via: newLanGw}),
 			control: answered(ctl),
 			want:    nil,
 		},
@@ -283,15 +297,18 @@ func TestPlan(t *testing.T) {
 }
 
 func TestBlocks(t *testing.T) {
-	f := DeriveFacts(astrill(staleOperatorR1, staleOperatorR2), answered(ctl))
+	f := DeriveFacts(astrill(workingOperatorR1, workingOperatorR2), answered(ctl))
 	want := []Blocked{
-		{Want: r2, By: staleOperatorR2},
-		{Want: r1, By: staleOperatorR1},
+		{Want: r2, By: workingOperatorR2},
+		{Want: r1, By: workingOperatorR1},
 	}
 	if diff := cmp.Diff(want, Blocks(f), equateIP); diff != "" {
 		t.Errorf("Blocks (-want +got):\n%s", diff)
 	}
 	if got := Blocks(DeriveFacts(astrill(r1, r2), answered(ctl))); got != nil {
 		t.Errorf("Blocks on a correct table = %v, want none", got)
+	}
+	if got := Blocks(DeriveFacts(astrill(r2, staleOperatorR1), answered(ctl))); got != nil {
+		t.Errorf("Blocks with a stale operator route = %v, want none: Plan replaces it", got)
 	}
 }

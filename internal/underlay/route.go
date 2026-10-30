@@ -3,7 +3,10 @@
 // they apply the actions that Plan returns.
 package underlay
 
-import "net/netip"
+import (
+	"net/netip"
+	"slices"
+)
 
 // Route is one IPv4 entry of the kernel routing table.
 type Route struct {
@@ -30,6 +33,19 @@ func (r Route) sameRoute(o Route) bool {
 // destination and the same scope. A global route has no scope interface.
 func (r Route) sameKey(o Route) bool {
 	return r.Dst == o.Dst && r.Scoped == o.Scoped && (!r.Scoped || r.Iface == o.Iface)
+}
+
+// staleIn reports whether r cannot work in table: r has a next hop, and no
+// route on its interface other than a default covers that next hop. A next
+// hop must be on a link of the interface. After a network change, the kernel
+// keeps a route to a next hop of the old network.
+func (r Route) staleIn(table []Route) bool {
+	if !r.Via.IsValid() {
+		return false
+	}
+	return !slices.ContainsFunc(table, func(o Route) bool {
+		return o.Iface == r.Iface && o.Dst.Bits() > 0 && o.Dst.Contains(r.Via)
+	})
 }
 
 // Link is an interface with its next hop.

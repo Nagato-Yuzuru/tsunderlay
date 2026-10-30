@@ -13,7 +13,8 @@ type Action interface{ isAction() }
 // Add adds Route with RTF_PROTO1.
 type Add struct{ Route Route }
 
-// Delete deletes Route. Plan deletes only owned routes.
+// Delete deletes Route. Plan deletes owned routes, and routes of the
+// operator that hold the key of a desired route and cannot work (Route.staleIn).
 type Delete struct{ Route Route }
 
 func (Add) isAction()    {}
@@ -30,9 +31,9 @@ func Plan(f Facts) []Action {
 }
 
 // Blocked is a route that the facts need, but a route of the operator holds
-// its key with another next hop. The kernel refuses the add ("File exists"),
-// and tsunderlay does not delete a route that it does not own, so the
-// operator must delete By.
+// its key with another next hop that can work. The kernel refuses the add
+// ("File exists"), and tsunderlay does not delete a working route that it
+// does not own, so the operator must delete By.
 type Blocked struct{ Want, By Route }
 
 // Blocks returns the routes that Plan cannot add.
@@ -49,10 +50,10 @@ func plan(f Facts) ([]Action, []Blocked) {
 	}
 	want := desired(f)
 
-	var actions []Action
+	var deletes, adds []Action
 	for _, r := range f.Table {
 		if r.Owned && !slices.ContainsFunc(want, r.sameRoute) {
-			actions = append(actions, Delete{Route: r})
+			deletes = append(deletes, Delete{Route: r})
 		}
 	}
 	var blocked []Blocked
@@ -61,12 +62,21 @@ func plan(f Facts) ([]Action, []Blocked) {
 			continue
 		}
 		// An owned route with the same key is deleted above.
-		if i := slices.IndexFunc(f.Table, func(o Route) bool { return !o.Owned && r.sameKey(o) }); i >= 0 {
+		i := slices.IndexFunc(f.Table, func(o Route) bool { return !o.Owned && r.sameKey(o) })
+		switch {
+		case i < 0:
+		case f.Table[i].staleIn(f.Table):
+			// A manual repair from another network leaves such a route. It
+			// cannot work, so replacing it removes nothing that the operator
+			// uses.
+			deletes = append(deletes, Delete{Route: f.Table[i]})
+		default:
 			blocked = append(blocked, Blocked{Want: r, By: f.Table[i]})
 			continue
 		}
-		actions = append(actions, Add{Route: r})
+		adds = append(adds, Add{Route: r})
 	}
+	actions := append(deletes, adds...)
 	return actions, blocked
 }
 
