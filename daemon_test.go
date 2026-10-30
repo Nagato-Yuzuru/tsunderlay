@@ -300,8 +300,10 @@ func TestReconcileRetriesSoonWhenTheFirstTryHadNoEffect(t *testing.T) {
 
 func TestReconcileBlockedRouteWarnsOnceAndAddsNothing(t *testing.T) {
 	var b bytes.Buffer
-	stale := underlay.Route{Dst: ctl, Iface: "en0", Scoped: true, Via: netip.MustParseAddr("192.168.2.1")}
-	h := &fakeHost{table: append(slices.Clone(astrillTable), r2, stale)}
+	// The link route keeps the operator route working, so it is not replaced.
+	link := underlay.Route{Dst: netip.MustParsePrefix("192.168.2.0/24"), Iface: "en0"}
+	operator := underlay.Route{Dst: ctl, Iface: "en0", Scoped: true, Via: netip.MustParseAddr("192.168.2.1")}
+	h := &fakeHost{table: append(slices.Clone(astrillTable), r2, link, operator)}
 	d := h.daemon(slog.New(slog.NewJSONHandler(&b, nil)))
 	for range 3 {
 		d.reconcile(t.Context(), triggerRouteEvent)
