@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/routecmd"
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
@@ -56,7 +57,7 @@ func TestFetchReadsRoutes(t *testing.T) {
 			if !ok {
 				t.Fatalf("rib.Fetch has no route %s on %s (scoped %v)", tt.want.Dst, tt.want.Iface, tt.want.Scoped)
 			}
-			if diff := cmp.Diff(tt.want, got); diff != "" {
+			if diff := cmp.Diff(tt.want, got, equateIP); diff != "" {
 				t.Errorf("rib.Fetch route mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -98,7 +99,7 @@ func TestRunAppliesActions(t *testing.T) {
 				if !ok {
 					t.Fatalf("%s: rib.Fetch has no route after %s", step, routecmd.Line(add))
 				}
-				if diff := cmp.Diff(tt.route, got); diff != "" {
+				if diff := cmp.Diff(tt.route, got, equateIP); diff != "" {
 					t.Fatalf("%s: route mismatch (-want +got):\n%s", step, diff)
 				}
 			}
@@ -118,3 +119,6 @@ func run(t *testing.T, step string, a underlay.Action) {
 		t.Fatalf("%s: %v", step, err)
 	}
 }
+
+// netip types have unexported fields, so cmp needs to compare them with ==.
+var equateIP = cmpopts.EquateComparable(netip.Addr{}, netip.Prefix{})
