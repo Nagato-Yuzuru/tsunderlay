@@ -82,6 +82,14 @@ attributes:
     annotations:
       go:
         name: attrDNSError
+  - key: tsunderlay.rib.error
+    type: string
+    stability: development
+    brief: The failure to read the routing table.
+    examples: ["reading the routing table: cannot allocate memory"]
+    annotations:
+      go:
+        name: attrRIBError
   - key: tsunderlay.actions
     type: any
     stability: development

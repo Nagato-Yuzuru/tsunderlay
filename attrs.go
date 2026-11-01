@@ -36,6 +36,9 @@ const (
 	// The route commands of a plan that the last reconcile applied and the table still needs, one on each line.
 	attrNoEffect = "tsunderlay.plan.no_effect"
 
+	// The failure to read the routing table.
+	attrRIBError = "tsunderlay.rib.error"
+
 	// The cause of the reconcile.
 	attrTrigger = "tsunderlay.trigger"
 

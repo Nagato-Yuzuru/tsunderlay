@@ -21,6 +21,7 @@ OpenTelemetry semantic conventions do not define these attributes.
 | `tsunderlay.exit_reason` | string | development | The cause of the daemon exit, `signal` or the error that stopped the daemon. | `"signal"` |
 | `tsunderlay.lan` | string | development | The physical uplink, as the interface and the gateway. | `"en0 via 192.168.1.1"`, `"none (no global default on a physical interface)"` |
 | `tsunderlay.plan.no_effect` | string | development | The route commands of a plan that the last reconcile applied and the table still needs, one on each line. | `"/sbin/route -n add -proto1 -host 3.33.130.190 192.168.1.1"` |
+| `tsunderlay.rib.error` | string | development | The failure to read the routing table. | `"reading the routing table: cannot allocate memory"` |
 | `tsunderlay.trigger` | enum | development | The cause of the reconcile. |  |
 | `tsunderlay.vpn` | string | development | The full-tunnel VPN, as the interface and the gateway of the split default routes. | `"utun5 via 198.18.64.1"`, `"none (no global 0/1 and 128.0/1)"` |
 
