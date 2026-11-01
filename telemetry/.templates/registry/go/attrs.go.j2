@@ -1,14 +1,29 @@
 {#- Renders attrs.go from the v2 context of the registry in telemetry/. -#}
 {%- set semconv_base = "https://opentelemetry.io/schemas/" -%}
-{%- set semconv = ctx.registry.attribute_groups | selectattr("id", "eq", "tsunderlay.semconv") | first -%}
-{%- macro value_consts(attr, members) -%}
+{#- The semconv attributes are the attributes that any group or signal
+    references and the registry does not define. telemetry.md.j2 collects
+    them in the same way: change both together. -#}
+{%- set r = ctx.registry -%}
+{%- set c = namespace(refs=[]) -%}
+{%- for g in r.attribute_groups + r.events + r.spans + r.metrics + ctx.refinements.events + ctx.refinements.spans + ctx.refinements.metrics -%}
+{%- set c.refs = c.refs + (g.attributes | default([])) -%}
+{%- endfor -%}
+{%- for e in r.entities -%}
+{%- set c.refs = c.refs + (e.identity | default([])) + (e.description | default([])) -%}
+{%- endfor -%}
+{%- set semconv_attrs = c.refs | rejectattr("key", "in", r.attributes | map(attribute="key") | list) | sort(attribute="key") | unique(attribute="key") | list -%}
+{#- A brief can span lines, and a Go line comment cannot. -#}
+{%- macro comment(text) -%}
+// {{ text | trim | replace("\n", " ") }}
+{%- endmacro -%}
+{%- macro value_consts(name, members) -%}
 
-// Values of {{ attr.annotations.go.name }}.
+// Values of {{ name }}.
 const (
 {%- for m in members %}
 {%- if not loop.first %}
 {% endif %}
-	// {{ m.brief | trim }}
+	{{ comment(m.brief) }}
 	{{ m.annotations.go.name }} = "{{ m.value }}"
 {%- endfor %}
 )
@@ -26,23 +41,23 @@ import semconv "go.opentelemetry.io/otel/semconv/v{{ dep[semconv_base | length:]
 // Log attribute keys. A key is a contract with the queries of the operator:
 // do not rename one. docs/telemetry.md describes each key.
 const (
-{%- for attr in ctx.registry.attributes %}
+{%- for attr in r.attributes %}
 {%- if not loop.first %}
 {% endif %}
-	// {{ attr.brief | trim }}
+	{{ comment(attr.brief) }}
 	{{ attr.annotations.go.name }} = "{{ attr.key }}"
 {%- endfor %}
-{%- for attr in semconv.attributes %}
+{%- for attr in semconv_attrs %}
 
-	// {{ attr.brief | trim }}
-	{{ attr.annotations.go.name }} = string(semconv.{{ attr.key | pascal_case }}Key)
+	{{ comment(attr.brief) }}
+	attr{{ attr.key | pascal_case }} = string(semconv.{{ attr.key | pascal_case }}Key)
 {%- endfor %}
 )
-{%- for attr in ctx.registry.attributes if attr.type.members is defined %}
+{%- for attr in r.attributes if attr.type.members is defined %}
 
-{{ value_consts(attr, attr.type.members) }}
+{{ value_consts(attr.annotations.go.name, attr.type.members) }}
 {%- endfor %}
-{%- for attr in semconv.attributes if attr.annotations.go.members is defined %}
+{%- for attr in semconv_attrs if attr.annotations is defined and attr.annotations.go.members is defined %}
 
-{{ value_consts(attr, attr.annotations.go.members) }}
+{{ value_consts("attr" ~ (attr.key | pascal_case), attr.annotations.go.members) }}
 {%- endfor %}
