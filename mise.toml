@@ -36,13 +36,22 @@ run = [
 [tasks.e2e]
 description = "Run the end-to-end tests as root on this host. Use only on a disposable host (CI, VM)"
 depends = ["e2e:build"]
+# TestInstall runs alone, after the other tests. The daemon that it installs
+# deletes owned routes, so a daemon that its cleanup cannot stop must not
+# run during another test.
 run = '''
-sudo env \
-  TSUNDERLAY_E2E_DISPOSABLE="${TSUNDERLAY_E2E_DISPOSABLE:-}" \
-  TSUNDERLAY_E2E_STRICT="${TSUNDERLAY_E2E_STRICT:-}" \
-  TSUNDERLAY_E2E_BINARY="{{config_root}}/bin/tsunderlay" \
-  TSUNDERLAY_E2E_BINARY_NEXT="{{config_root}}/bin/tsunderlay-next" \
-  ./bin/e2e.test -test.v
+e2e() {
+  sudo env \
+    TSUNDERLAY_E2E_DISPOSABLE="${TSUNDERLAY_E2E_DISPOSABLE:-}" \
+    TSUNDERLAY_E2E_STRICT="${TSUNDERLAY_E2E_STRICT:-}" \
+    TSUNDERLAY_E2E_BINARY="{{config_root}}/bin/tsunderlay" \
+    TSUNDERLAY_E2E_BINARY_NEXT="{{config_root}}/bin/tsunderlay-next" \
+    ./bin/e2e.test -test.v "$@"
+}
+status=0
+e2e -test.skip '^TestInstall$' || status=$?
+e2e -test.run '^TestInstall$' || status=$?
+exit "$status"
 '''
 
 # telemetry/manifest.yaml reads the semconv dependency from this archive.
@@ -95,13 +104,20 @@ if ! tart exec "$vm" true 2>/dev/null; then
   done
 fi
 # The guest agent's PATH does not include /sbin, where ifconfig and route are.
-tart exec "$vm" sudo env \
-  PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-  TSUNDERLAY_E2E_DISPOSABLE=1 \
-  TSUNDERLAY_E2E_STRICT=1 \
-  "TSUNDERLAY_E2E_BINARY=/Volumes/My Shared Files/tsunderlay/bin/tsunderlay" \
-  "TSUNDERLAY_E2E_BINARY_NEXT=/Volumes/My Shared Files/tsunderlay/bin/tsunderlay-next" \
-  "/Volumes/My Shared Files/tsunderlay/bin/e2e-guest.test" -test.v
+# TestInstall runs alone, after the other tests, as in the e2e task.
+e2e() {
+  tart exec "$vm" sudo env \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    TSUNDERLAY_E2E_DISPOSABLE=1 \
+    TSUNDERLAY_E2E_STRICT=1 \
+    "TSUNDERLAY_E2E_BINARY=/Volumes/My Shared Files/tsunderlay/bin/tsunderlay" \
+    "TSUNDERLAY_E2E_BINARY_NEXT=/Volumes/My Shared Files/tsunderlay/bin/tsunderlay-next" \
+    "/Volumes/My Shared Files/tsunderlay/bin/e2e-guest.test" -test.v "$@"
+}
+status=0
+e2e -test.skip '^TestInstall$' || status=$?
+e2e -test.run '^TestInstall$' || status=$?
+exit "$status"
 '''
 
 # The registry check sees only the registry, not the keys in the code. This

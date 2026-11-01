@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
 )
@@ -20,16 +21,18 @@ const defaultControlURL = "https://controlplane.tailscale.com"
 const dnsTimeout = 5 * time.Second
 
 // ErrControlURL means that a --control-url value is not an absolute http or
-// https URL.
-var ErrControlURL = errors.New("control URL must be an absolute http or https URL")
+// https URL in UTF-8.
+var ErrControlURL = errors.New("control URL must be an absolute http or https URL in UTF-8")
 
 // controlHosts returns the host of each control URL, without duplicates.
-// It wraps ErrControlURL for a value that is not a URL with a host.
+// It wraps ErrControlURL for a value that is not a URL with a host. A value
+// must be UTF-8: install writes it into a plist, and a plist parser reads
+// another string from bytes that are not UTF-8.
 func controlHosts(urls []string) ([]string, error) {
 	var hosts []string
 	for _, s := range urls {
 		u, err := url.Parse(s)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		if err != nil || !utf8.ValidString(s) || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 			return nil, fmt.Errorf("%w: %q", ErrControlURL, s)
 		}
 		if h := u.Hostname(); !slices.Contains(hosts, h) {

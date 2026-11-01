@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -22,9 +23,6 @@ type OS struct{}
 // ReadFile implements FS.
 func (OS) ReadFile(name string) ([]byte, error) { return os.ReadFile(name) }
 
-// EvalSymlinks implements FS.
-func (OS) EvalSymlinks(path string) (string, error) { return filepath.EvalSymlinks(path) }
-
 // Lstat implements FS.
 func (OS) Lstat(name string) (FileStat, error) {
 	fi, err := os.Lstat(name)
@@ -35,7 +33,7 @@ func (OS) Lstat(name string) (FileStat, error) {
 	if !ok {
 		return FileStat{}, fmt.Errorf("%s: %w", name, errors.ErrUnsupported)
 	}
-	return FileStat{UID: st.Uid, Mode: fi.Mode()}, nil
+	return FileStat{UID: st.Uid, GID: st.Gid, Mode: fi.Mode()}, nil
 }
 
 // Remove implements FS.
@@ -50,14 +48,15 @@ func (OS) Remove(name string) error {
 // name and renames it to name. The temporary file has a fixed name, so the
 // next write replaces a file that a crash left. Install writes only in
 // directories that only root can change, so no other user can put a file at
-// that name.
+// that name, and Install holds its lock, so no other install writes it at
+// the same time.
 func (OS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	tmp := filepath.Join(filepath.Dir(name), "."+filepath.Base(name)+".tmp")
 	if err := writeTemp(tmp, data, perm); err != nil {
 		return errors.Join(err, OS{}.Remove(tmp))
 	}
 	if err := os.Rename(tmp, name); err != nil {
-		return errors.Join(err, os.Remove(tmp))
+		return errors.Join(err, OS{}.Remove(tmp))
 	}
 	return nil
 }
@@ -80,6 +79,38 @@ func writeTemp(tmp string, data []byte, perm fs.FileMode) (err error) {
 	return f.Sync()
 }
 
+// Mkdir implements FS.
+func (OS) Mkdir(name string, perm fs.FileMode) error {
+	if err := os.Mkdir(name, 0o700); err != nil {
+		return err
+	}
+	if err := os.Lchown(name, 0, 0); err != nil {
+		return err
+	}
+	// Chmod and not Mkdir sets the mode: the umask does not apply to it, and
+	// it sets the sticky bit.
+	return os.Chmod(name, perm)
+}
+
+// Lock implements FS with flock(2). The kernel releases the lock when the
+// file closes, also when the process dies.
+func (OS) Lock(name string) (io.Closer, error) {
+	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+		if !errors.Is(err, syscall.EINTR) {
+			break
+		}
+	}
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("flock %s: %w", name, err), f.Close())
+	}
+	return f, nil
+}
+
 const (
 	launchctlPath = "/bin/launchctl"
 	// bootoutWait is the longest wait for launchd to remove a job after
@@ -91,17 +122,31 @@ const (
 // Launchctl controls launchd with /bin/launchctl.
 type Launchctl struct{}
 
-// Loaded implements Launchd. launchctl print exits non-zero when the
-// domain has no job of service.
+// notFound is the exit status of launchctl print when the domain has no
+// job of the service ("Could not find service").
+const notFound = 113
+
+// Loaded implements Launchd.
 func (Launchctl) Loaded(ctx context.Context, service string) (bool, error) {
-	err := exec.CommandContext(ctx, launchctlPath, "print", service).Run()
+	return printResult(service, exec.CommandContext(ctx, launchctlPath, "print", service).Run())
+}
+
+// printResult reads the result of launchctl print. Only the status
+// notFound means that the job is not loaded. Another status, for example a
+// usage error or a kill by the context, does not tell the job state.
+func printResult(service string, err error) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
-	if _, ok := errors.AsType[*exec.ExitError](err); ok {
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok && ee.ExitCode() == notFound {
 		return false, nil
 	}
 	return false, fmt.Errorf("%w: print %s: %v", ErrLaunchctl, service, err)
+}
+
+// Enable implements Launchd.
+func (Launchctl) Enable(ctx context.Context, service string) error {
+	return launchctl(ctx, "enable", service)
 }
 
 // Bootstrap implements Launchd.

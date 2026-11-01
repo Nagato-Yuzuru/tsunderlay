@@ -26,6 +26,7 @@ func TestControlHosts(t *testing.T) {
 		{name: "a bare host name is not a URL", urls: []string{"hs.example.com"}, wantErr: true},
 		{name: "another scheme is rejected", urls: []string{"ftp://hs.example.com"}, wantErr: true},
 		{name: "a URL without a host is rejected", urls: []string{"https://"}, wantErr: true},
+		{name: "a URL that is not UTF-8 is rejected", urls: []string{"https://hs.example.com/\xff"}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
