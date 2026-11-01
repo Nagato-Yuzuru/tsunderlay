@@ -1,0 +1,74 @@
+name: canary
+
+on:
+  # Wednesday 09:23 UTC. Renovate works on Monday before 06:00, and vuln.yml
+  # runs at 03:17 every day. This time collides with neither.
+  schedule:
+    - cron: "23 9 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MISE_DISABLE_TOOLS: tart
+  MISE_LOCKED: "1"
+
+jobs:
+  tailscale-main:
+    name: tailscale.com@main
+    # The daemon code is darwin-only, so go vet must run on macOS.
+    runs-on: macos-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      # This change to go.mod stays in the runner. The job never pushes.
+      - id: bump
+        run: |
+          go get tailscale.com@main
+          go mod tidy
+          echo "version=$(go list -m -f '{{.Version}}' tailscale.com)" >> "$GITHUB_OUTPUT"
+      # The e2e tags make vet compile the e2e package, the only user of
+      # tailscale.com. The guest tests do not run here. They need a tart VM.
+      - run: go vet -tags e2e,e2e_guest ./...
+      - run: go test ./...
+
+  report:
+    name: report failure
+    needs: [tailscale-main]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      TS_VERSION: ${{ needs.tailscale-main.outputs.version }}
+    steps:
+      # One open issue collects all failures. A repeat failure adds a comment.
+      - run: |
+          body="The canary failed against tailscale.com ${TS_VERSION:-unknown (go get failed)}.
+
+          Run: ${RUN_URL}"
+          gh label create canary --force --color D93F0B \
+            --description "Tailscale main branch canary"
+          number=$(gh issue list --label canary --state open --limit 1 \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --label canary \
+              --title "canary: tailscale.com@main breaks the build" \
+              --body "$body"
+          fi
