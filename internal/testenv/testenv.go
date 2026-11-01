@@ -5,16 +5,23 @@
 package testenv
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"syscall"
 	"testing"
 )
 
+// DisposableMarker is the file that marks a host whose network state a test
+// can change: a CI runner or a disposable VM. End-to-end tests add routes and
+// interfaces, so they never run on a host without this file. The file must
+// be owned by root, so that only root can mark a host. The e2e mise task
+// does not create it; the CI job and `mise run vm:e2e` do.
+const DisposableMarker = "/var/db/tsunderlay-e2e-disposable"
+
 const (
-	// EnvDisposable marks a host whose network state a test can change: a CI
-	// runner or a disposable VM. End-to-end tests add routes and interfaces,
-	// so they never run on a host without this mark.
-	EnvDisposable = "TSUNDERLAY_E2E_DISPOSABLE"
 	// EnvStrict turns every unmet requirement into a failure.
 	EnvStrict = "TSUNDERLAY_E2E_STRICT"
 	// EnvBinary is the path of the tsunderlay binary that `mise run
@@ -25,12 +32,38 @@ const (
 	EnvBinaryNext = "TSUNDERLAY_E2E_BINARY_NEXT"
 )
 
-// RequireDisposableHost skips the test unless EnvDisposable is "1".
+// RequireDisposableHost skips the test unless DisposableMarker exists and
+// root owns it.
 func RequireDisposableHost(t testing.TB) {
 	t.Helper()
-	if os.Getenv(EnvDisposable) != "1" {
-		unmet(t, EnvDisposable+"=1 is not set; run through `mise run e2e` on a disposable host or CI")
+	if err := checkMarker(DisposableMarker, 0); err != nil {
+		unmet(t, err.Error()+"; the host is not disposable. Run the tests through `mise run vm:e2e` or CI")
 	}
+}
+
+var (
+	errMarkerMissing   = errors.New("disposable marker does not exist")
+	errMarkerNoOwner   = errors.New("disposable marker has no owner information")
+	errMarkerWrongUser = errors.New("disposable marker has the wrong owner")
+)
+
+// checkMarker returns nil when path exists and its owner has the uid owner.
+func checkMarker(path string, owner uint32) error {
+	fi, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w: %s", errMarkerMissing, path)
+	}
+	if err != nil {
+		return fmt.Errorf("disposable marker: %w", err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("%w: %s", errMarkerNoOwner, path)
+	}
+	if st.Uid != owner {
+		return fmt.Errorf("%w: %s is owned by uid %d, not uid %d", errMarkerWrongUser, path, st.Uid, owner)
+	}
+	return nil
 }
 
 // RequireRoot skips the test unless the process runs as root.
