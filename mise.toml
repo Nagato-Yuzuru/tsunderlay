@@ -36,9 +36,9 @@ run = [
 [tasks.e2e]
 description = "Run the end-to-end tests as root on this host. They run only when the root-owned file /var/db/tsunderlay-e2e-disposable marks the host as disposable (CI, VM)"
 depends = ["e2e:build"]
-# TestInstall runs alone, after the other tests. The daemon that it installs
-# deletes owned routes, so a daemon that its cleanup cannot stop must not
-# run during another test. This task does not create the marker file, so
+# The tests whose names start with TestInstall run alone, after the other
+# tests. The daemon that they install deletes owned routes, so a daemon that
+# their cleanup cannot stop must not run during another test. This task does not create the marker file, so
 # the tests do not change a host that nothing marked as disposable.
 run = '''
 e2e() {
@@ -49,8 +49,8 @@ e2e() {
     ./bin/e2e.test -test.v "$@"
 }
 status=0
-e2e -test.skip '^TestInstall$' || status=$?
-e2e -test.run '^TestInstall$' || status=$?
+e2e -test.skip '^TestInstall' || status=$?
+e2e -test.run '^TestInstall' || status=$?
 exit "$status"
 '''
 
@@ -119,7 +119,7 @@ done
 # The guest is disposable, so the marker file goes into the guest only.
 tart exec "$vm" sudo touch /var/db/tsunderlay-e2e-disposable
 # The guest agent's PATH does not include /sbin, where ifconfig and route are.
-# TestInstall runs alone, after the other tests, as in the e2e task.
+# The TestInstall tests run alone, after the other tests, as in the e2e task.
 e2e() {
   tart exec "$vm" sudo env \
     PATH=/usr/bin:/bin:/usr/sbin:/sbin \
@@ -129,8 +129,8 @@ e2e() {
     "/Volumes/My Shared Files/tsunderlay/bin/e2e-guest.test" -test.v "$@"
 }
 status=0
-e2e -test.skip '^TestInstall$' || status=$?
-e2e -test.run '^TestInstall$' || status=$?
+e2e -test.skip '^TestInstall' || status=$?
+e2e -test.run '^TestInstall' || status=$?
 exit "$status"
 '''
 
