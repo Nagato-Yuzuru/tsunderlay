@@ -71,12 +71,17 @@ func NewUTUN(t testing.TB) *UTUN {
 		t.Fatalf("set %s non-blocking: %v", name, err)
 	}
 	u := &UTUN{Name: name, file: os.NewFile(uintptr(fd), name)}
-	t.Cleanup(func() {
-		if err := u.file.Close(); err != nil {
-			t.Errorf("close %s: %v", u.Name, err)
-		}
-	})
+	t.Cleanup(func() { u.Close(t) })
 	return u
+}
+
+// Close destroys the interface now, with its routes. A later call, such as
+// the cleanup, does nothing.
+func (u *UTUN) Close(t testing.TB) {
+	t.Helper()
+	if err := u.file.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+		t.Errorf("close %s: %v", u.Name, err)
+	}
 }
 
 // SetAddr gives the interface a point-to-point IPv4 address pair and brings
