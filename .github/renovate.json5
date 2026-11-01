@@ -48,6 +48,15 @@
       enabled: true,
     },
     {
+      // A major update of a Go module changes the module path. No code
+      // imports the new path of an indirect module, so go mod tidy removes
+      // it again, and the PR changes nothing.
+      matchManagers: ["gomod"],
+      matchDepTypes: ["indirect"],
+      matchUpdateTypes: ["major"],
+      enabled: false,
+    },
+    {
       // tsunderlay works around the behavior of tailscale.com/net/netns, and
       // the guest tests pin the version that Rex uses. CI does not run the
       // guest tests, so a person runs `mise run vm:e2e` before the merge.
