@@ -4,6 +4,8 @@ package install
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,5 +71,64 @@ func TestLockIsExclusiveUntilClose(t *testing.T) {
 	}
 	if err := probe(); err != nil {
 		t.Errorf("flock after Close: %v, want the lock", err)
+	}
+}
+
+// Uninstall removes the lock file while it holds the lock. A Lock that
+// waited on the removed file must not return with it: a new process makes a
+// new file and locks it at the same time. So the lock that Lock returns is
+// on the file at the path, in each order of the open and the remove.
+//
+// The waiter opens the file before the remove in most rounds, not in each.
+// Many rounds make a Lock without the check fail on each run.
+func TestLockAfterRemoveIsOnTheFileAtThePath(t *testing.T) {
+	const rounds = 200
+	dir := t.TempDir()
+	for i := range rounds {
+		lockRound(t, filepath.Join(dir, fmt.Sprintf("install-%d.lock", i)))
+		if t.Failed() {
+			t.Fatalf("round %d of %d failed", i+1, rounds)
+		}
+	}
+}
+
+// lockRound removes the lock file while a second Lock waits, and checks
+// that the second Lock holds the file at path.
+func lockRound(t *testing.T, path string) {
+	t.Helper()
+	first, err := OS{}.Lock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		lock io.Closer
+		err  error
+	}
+	done := make(chan result)
+	go func() {
+		l, err := OS{}.Lock(path)
+		done <- result{l, err}
+	}()
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second := <-done
+	if second.err != nil {
+		t.Fatal(second.err)
+	}
+	defer second.lock.Close() //nolint:errcheck // the round ends; the close releases the lock
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Errorf("no file at the path while Lock holds the lock: %v", err)
+		return
+	}
+	defer f.Close() //nolint:errcheck // a read-only probe; the close releases its lock
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); !errors.Is(err, syscall.EWOULDBLOCK) {
+		t.Errorf("flock of the file at the path: %v, want EWOULDBLOCK", err)
 	}
 }

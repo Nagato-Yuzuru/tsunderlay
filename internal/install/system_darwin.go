@@ -11,7 +11,6 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -44,14 +43,14 @@ func (OS) Remove(name string) error {
 	return nil
 }
 
-// WriteFile implements FS. It writes a temporary file in the directory of
-// name and renames it to name. The temporary file has a fixed name, so the
-// next write replaces a file that a crash left. Install writes only in
-// directories that only root can change, so no other user can put a file at
-// that name, and Install holds its lock, so no other install writes it at
-// the same time.
+// WriteFile implements FS. It writes the temporary file tempPath(name) and
+// renames it to name. The temporary file has a fixed name, so the next
+// write replaces a file that a crash left, and Uninstall removes it.
+// Install writes only in directories that only root can change, so no other
+// user can put a file at that name, and Install holds its lock, so no other
+// install writes it at the same time.
 func (OS) WriteFile(name string, data []byte, perm fs.FileMode) error {
-	tmp := filepath.Join(filepath.Dir(name), "."+filepath.Base(name)+".tmp")
+	tmp := tempPath(name)
 	if err := writeTemp(tmp, data, perm); err != nil {
 		return errors.Join(err, OS{}.Remove(tmp))
 	}
@@ -94,7 +93,31 @@ func (OS) Mkdir(name string, perm fs.FileMode) error {
 
 // Lock implements FS with flock(2). The kernel releases the lock when the
 // file closes, also when the process dies.
+//
+// Uninstall removes the lock file while it holds the lock. A process that
+// waited on the removed file then has a lock that no new process sees, so
+// Lock locks the file at name again until the locked file is the file at
+// name.
 func (OS) Lock(name string) (io.Closer, error) {
+	for {
+		f, err := lockFile(name)
+		if err != nil {
+			return nil, err
+		}
+		same, err := isFileAt(f, name)
+		if err != nil {
+			return nil, errors.Join(err, f.Close())
+		}
+		if same {
+			return f, nil
+		}
+		if err := f.Close(); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func lockFile(name string) (*os.File, error) {
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, err
@@ -109,6 +132,22 @@ func (OS) Lock(name string) (io.Closer, error) {
 		return nil, errors.Join(fmt.Errorf("flock %s: %w", name, err), f.Close())
 	}
 	return f, nil
+}
+
+// isFileAt tells whether f is the file at name now.
+func isFileAt(f *os.File, name string) (bool, error) {
+	held, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	now, err := os.Lstat(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(held, now), nil
 }
 
 const (

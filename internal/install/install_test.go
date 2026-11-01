@@ -93,9 +93,13 @@ func (f *fakeFS) Mkdir(name string, perm fs.FileMode) error {
 	return nil
 }
 
+// Lock makes the file when it is missing, the same as OS.Lock.
 func (f *fakeFS) Lock(name string) (io.Closer, error) {
 	f.lock <- struct{}{}
 	f.record("lock %s", name)
+	if _, ok := f.files[name]; !ok {
+		f.files[name] = file{st: FileStat{Mode: 0o600}}
+	}
 	return unlocker{f}, nil
 }
 

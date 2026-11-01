@@ -25,6 +25,7 @@ func TestRun(t *testing.T) {
 		// never install, also as root.
 		{name: "install takes no arguments", args: []string{"install", "extra"}, wantCode: 2},
 		{name: "install rejects a control URL without a host", args: []string{"install", "--control-url", "https://"}, wantCode: 2},
+		{name: "uninstall takes no arguments", args: []string{"uninstall", "extra"}, wantCode: 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
