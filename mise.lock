@@ -42,6 +42,53 @@ checksum = "sha256:6ece2112b3f4af462190ecbea4aeb1315fff6af415629b597f84319073c31
 url = "https://github.com/orhun/git-cliff/releases/download/v2.14.2/git-cliff-2.14.2-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/orhun/git-cliff/releases/assets/573487227"
 
+[[tools."github:open-telemetry/weaver"]]
+version = "0.28.0"
+backend = "github:open-telemetry/weaver"
+specifiers = ["0.28.0"]
+
+[tools."github:open-telemetry/weaver"."platforms.linux-arm64"]
+checksum = "sha256:dab3251667c64e7bf5e20f294667a5ac9c041ee21212f8390e6affe70c487ddc"
+url = "https://github.com/open-telemetry/weaver/releases/download/v0.28.0/weaver-aarch64-unknown-linux-gnu.tar.xz"
+url_api = "https://api.github.com/repos/open-telemetry/weaver/releases/assets/641116757"
+provenance = "github-attestations"
+
+[tools."github:open-telemetry/weaver"."platforms.linux-arm64-musl"]
+checksum = "sha256:55a47e3d6226a372570b65853e56413266c149aaa7716172bdffb0dc8422d544"
+url = "https://github.com/open-telemetry/weaver/releases/download/v0.28.0/weaver-aarch64-unknown-linux-musl.tar.xz"
+url_api = "https://api.github.com/repos/open-telemetry/weaver/releases/assets/641116776"
+provenance = "github-attestations"
+
+[tools."github:open-telemetry/weaver"."platforms.linux-x64"]
+checksum = "sha256:9878e2d56ad82ae441b0b527377a4f6001ae19f4af362fb0a4d951884f59ab61"
+url = "https://github.com/open-telemetry/weaver/releases/download/v0.28.0/weaver-x86_64-unknown-linux-gnu.tar.xz"
+url_api = "https://api.github.com/repos/open-telemetry/weaver/releases/assets/641116864"
+provenance = "github-attestations"
+
+[tools."github:open-telemetry/weaver"."platforms.linux-x64-musl"]
+checksum = "sha256:69069769ec3509c358ddbfbc29ff9965590fe4f8dd8b03e1c1e1be1ae56122e8"
+url = "https://github.com/open-telemetry/weaver/releases/download/v0.28.0/weaver-x86_64-unknown-linux-musl.tar.xz"
+url_api = "https://api.github.com/repos/open-telemetry/weaver/releases/assets/641116889"
+provenance = "github-attestations"
+
+[tools."github:open-telemetry/weaver"."platforms.macos-arm64"]
+checksum = "sha256:b334b37372325f77374b461fd6a11d38bc050122832eb83a9732fcd6831a5ab1"
+url = "https://github.com/open-telemetry/weaver/releases/download/v0.28.0/weaver-aarch64-apple-darwin.tar.xz"
+url_api = "https://api.github.com/repos/open-telemetry/weaver/releases/assets/641116718"
+provenance = "github-attestations"
+
+[tools."github:open-telemetry/weaver"."platforms.macos-x64"]
+checksum = "sha256:40dd65d72b43bc97041b849203e450b322cd786629af8f926cfd2d05798d9ca4"
+url = "https://github.com/open-telemetry/weaver/releases/download/v0.28.0/weaver-x86_64-apple-darwin.tar.xz"
+url_api = "https://api.github.com/repos/open-telemetry/weaver/releases/assets/641116802"
+provenance = "github-attestations"
+
+[tools."github:open-telemetry/weaver"."platforms.windows-x64"]
+checksum = "sha256:23204db0d97bee60a51bb4e9ee0c185ea3cc5f788ceb51b0ded2135d297ccf10"
+url = "https://github.com/open-telemetry/weaver/releases/download/v0.28.0/weaver-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/open-telemetry/weaver/releases/assets/641116835"
+provenance = "github-attestations"
+
 [[tools.go]]
 version = "1.27.3"
 backend = "core:go"

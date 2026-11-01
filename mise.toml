@@ -1,6 +1,7 @@
 [tools]
 git-cliff = "2.14.2"
 go = "1.27.3"
+"github:open-telemetry/weaver" = "0.28.0"
 "go:golang.org/x/vuln/cmd/govulncheck" = "1.9.0"
 golangci-lint = "2.15.0"
 jactionlint = "2.3.0"
@@ -26,4 +27,19 @@ sudo env \
   TSUNDERLAY_E2E_DISPOSABLE="${TSUNDERLAY_E2E_DISPOSABLE:-}" \
   TSUNDERLAY_E2E_STRICT="${TSUNDERLAY_E2E_STRICT:-}" \
   ./bin/e2e.test -test.v
+'''
+
+# telemetry/manifest.yaml reads the semconv dependency from this archive.
+# Change the version here and in the manifest together.
+[tasks."telemetry:semconv"]
+description = "Download the semconv archive that the telemetry registry depends on"
+run = '''
+set -eu
+f=.cache/weaver/semconv-v1.43.0.tar.gz
+sum=ec7886ff60f500814a6f72c9f4955fcd040c019745e6beccb0e61886feae8618
+if [ -f "$f" ] && echo "$sum  $f" | shasum -a 256 -c --status; then exit 0; fi
+mkdir -p "${f%/*}"
+curl -fsSL -o "$f.tmp" https://github.com/open-telemetry/semantic-conventions/archive/refs/tags/v1.43.0.tar.gz
+echo "$sum  $f.tmp" | shasum -a 256 -c --status
+mv -f "$f.tmp" "$f"
 '''

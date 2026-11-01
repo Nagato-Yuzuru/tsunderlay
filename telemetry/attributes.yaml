@@ -1,0 +1,160 @@
+# The log attributes of tsunderlay. A key is a contract with the queries of
+# the operator: do not rename one.
+#
+# The annotation go.name is the name of the Go constant that holds the key
+# or the value.
+file_format: definition/2
+
+attributes:
+  - key: tsunderlay.trigger
+    type:
+      members:
+        - id: start
+          value: start
+          brief: The daemon started.
+          stability: development
+          annotations:
+            go:
+              name: triggerStart
+        - id: route_event
+          value: route-event
+          brief: The kernel sent route messages.
+          stability: development
+          annotations:
+            go:
+              name: triggerRouteEvent
+        - id: backstop
+          value: backstop
+          brief: The backstop timer ticked.
+          stability: development
+          annotations:
+            go:
+              name: triggerBackstop
+        - id: retry
+          value: retry
+          brief: The wait that the last reconcile asked for ended.
+          stability: development
+          annotations:
+            go:
+              name: triggerRetry
+    stability: development
+    brief: The cause of the reconcile.
+    annotations:
+      go:
+        name: attrTrigger
+  - key: tsunderlay.lan
+    type: string
+    stability: development
+    brief: The physical uplink, as the interface and the gateway.
+    examples: ["en0 via 192.168.1.1", "none (no global default on a physical interface)"]
+    annotations:
+      go:
+        name: attrLAN
+  - key: tsunderlay.vpn
+    type: string
+    stability: development
+    brief: The full-tunnel VPN, as the interface and the gateway of the split default routes.
+    examples: ["utun5 via 198.18.64.1", "none (no global 0/1 and 128.0/1)"]
+    annotations:
+      go:
+        name: attrVPN
+  - key: tsunderlay.control.prefixes
+    type: string
+    stability: development
+    brief: The prefixes of the control hosts, separated by a comma and a space.
+    examples: ["3.33.130.190/32, 15.197.150.20/32", "none"]
+    annotations:
+      go:
+        name: attrControl
+  - key: tsunderlay.control.urls
+    type: string[]
+    stability: development
+    brief: The control server URLs that the daemon keeps reachable.
+    examples: [["https://controlplane.tailscale.com"]]
+    annotations:
+      go:
+        name: attrControlURLs
+  - key: tsunderlay.control.dns_error
+    type: string
+    stability: development
+    brief: The failure to resolve a control host.
+    examples: ["lookup controlplane.tailscale.com: no such host"]
+    annotations:
+      go:
+        name: attrDNSError
+  - key: tsunderlay.actions
+    type: any
+    stability: development
+    brief: The route commands of the plan, each with its error if it failed.
+    note: Each element is an object with the field `command` and the optional field `error`.
+    annotations:
+      go:
+        name: attrActions
+  - key: tsunderlay.blocked
+    type: string[]
+    stability: development
+    brief: The needed routes that an operator route holds, each with the command that deletes the operator route.
+    examples:
+      - ["192.200.0.0/24 is held by a route that tsunderlay does not own (en0 via 192.168.1.1); delete it: /sbin/route -n delete -ifscope en0 -net 192.200.0.0/24"]
+    annotations:
+      go:
+        name: attrBlocked
+  - key: tsunderlay.plan.no_effect
+    type: string
+    stability: development
+    brief: The route commands of a plan that the last reconcile applied and the table still needs, one on each line.
+    examples: ["/sbin/route -n add -proto1 -host 3.33.130.190 192.168.1.1"]
+    annotations:
+      go:
+        name: attrNoEffect
+  - key: tsunderlay.duration_ms
+    type: int
+    stability: development
+    brief: The time of the reconcile, in milliseconds.
+    examples: [12]
+    annotations:
+      go:
+        name: attrDurationMS
+  - key: tsunderlay.exit_reason
+    type: string
+    stability: development
+    brief: The cause of the daemon exit, `signal` or the error that stopped the daemon.
+    examples: ["signal"]
+    annotations:
+      go:
+        name: attrExitReason
+
+attribute_groups:
+  - id: tsunderlay.semconv
+    visibility: public
+    stability: development
+    brief: Attributes from OpenTelemetry semantic conventions that tsunderlay emits.
+    attributes:
+      - ref: error.type
+        brief: The class of the failure.
+        annotations:
+          go:
+            name: attrErrorType
+            # error.type is an open enum in semantic conventions, and a
+            # reference cannot add members. These are the values that
+            # tsunderlay emits, in the shape of enum members.
+            members:
+              - value: rib
+                brief: The daemon could not read the routing table.
+                annotations:
+                  go:
+                    name: errTypeRIB
+              - value: route
+                brief: A route command failed.
+                annotations:
+                  go:
+                    name: errTypeRoute
+      - ref: service.name
+        examples: ["tsunderlay"]
+        annotations:
+          go:
+            name: attrServiceName
+      - ref: service.version
+        annotations:
+          go:
+            name: attrServiceVersion

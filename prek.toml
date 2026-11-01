@@ -53,4 +53,11 @@ hooks = [
   { id = "jactionlint", name = "jactionlint", language = "system", entry = "mise exec -- jactionlint", files = '^\.github/workflows/.*\.ya?ml$' },
   # Offline audits need no GitHub token, so the hook works the same in CI.
   { id = "zizmor", name = "zizmor", language = "system", entry = "mise exec -- zizmor --offline", files = '^\.github/workflows/.*\.ya?ml$' },
+  # The registry in telemetry/ is the source of the log attribute names.
+  # Weaver reads the semconv dependency from a local archive. The
+  # telemetry:semconv task downloads it once.
+  { id = "weaver-check", name = "weaver registry check", language = "system", entry = "sh -c 'mise run -q telemetry:semconv && mise exec -- weaver registry check -r telemetry'", pass_filenames = false, files = '^telemetry/' },
+  # The templates read the v2 context, so the generate needs --v2. The diff
+  # fails when a generated file does not match the registry.
+  { id = "weaver-generate", name = "weaver registry generate", language = "system", entry = "sh -c 'mise run -q telemetry:semconv && mise exec -- weaver registry generate --v2 --quiet -r telemetry -t telemetry/.templates go . && mise exec -- weaver registry generate --v2 --quiet -r telemetry -t telemetry/.templates markdown docs && git diff --exit-code -- attrs.go docs/telemetry.md'", pass_filenames = false, files = '^(telemetry/|attrs\.go$|docs/telemetry\.md$)' },
 ]
