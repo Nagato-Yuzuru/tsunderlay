@@ -2,7 +2,9 @@
 # the operator: do not rename one.
 #
 # The annotation go.name is the name of the Go constant that holds the key
-# or the value.
+# or the value. The Go name of a semconv attribute comes from its key:
+# error.type is attrErrorType. The templates collect each semconv attribute
+# that a group or a signal references.
 file_format: definition/2
 
 attributes:
@@ -142,7 +144,6 @@ attribute_groups:
         brief: The class of the failure.
         annotations:
           go:
-            name: attrErrorType
             # error.type is an open enum in semantic conventions, and a
             # reference cannot add members. These are the values that
             # tsunderlay emits, in the shape of enum members.
@@ -159,10 +160,4 @@ attribute_groups:
                     name: errTypeRoute
       - ref: service.name
         examples: ["tsunderlay"]
-        annotations:
-          go:
-            name: attrServiceName
       - ref: service.version
-        annotations:
-          go:
-            name: attrServiceVersion
