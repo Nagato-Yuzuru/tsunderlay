@@ -44,6 +44,9 @@ func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "tsunderlay",
 		Short: "Keep the routes that Tailscale needs while a full-tunnel VPN is up",
+		// The module version that go install recorded, or a VCS pseudo-version
+		// for a local build.
+		Version: version(),
 		// run prints errors itself, and a usage text hides a runtime error.
 		SilenceErrors: true,
 		SilenceUsage:  true,
