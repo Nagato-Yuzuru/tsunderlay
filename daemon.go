@@ -95,7 +95,7 @@ func (d *daemon) reconcile(ctx context.Context, trigger string) time.Duration {
 		d.log.LogAttrs(ctx, slog.LevelError, "reconcile failed",
 			slog.String(attrTrigger, trigger),
 			slog.String(attrErrorType, errTypeRIB),
-			slog.String("error", err.Error()))
+			slog.String(attrRIBError, err.Error()))
 		return 0
 	}
 	control, dnsErr := resolveControl(ctx, d.lookup, d.hosts)
