@@ -2,6 +2,9 @@
 /CLAUDE.local.md
 /notes/
 
+# The semconv archive of the telemetry registry (mise run telemetry:semconv).
+/.cache/
+
 # go build output.
 /tsunderlay
 #--------------------------------------------------#
