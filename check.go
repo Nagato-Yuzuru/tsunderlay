@@ -8,8 +8,10 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 
+	"github.com/Nagato-Yuzuru/tsunderlay/internal/install"
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/rib"
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/routecmd"
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
@@ -29,10 +31,49 @@ func check(ctx context.Context, w io.Writer, hosts []string) error {
 	if _, err := io.WriteString(w, report(f, hosts, dnsErr, plan, underlay.Blocks(f))); err != nil {
 		return fmt.Errorf("writing the report: %w", err)
 	}
-	if code := status(f, dnsErr, plan, underlay.Blocks(f)); code != 0 {
-		return exitCode(code)
+	code := status(f, dnsErr, plan, underlay.Blocks(f))
+
+	exe, err := executable()
+	if err != nil {
+		return err
+	}
+	want, err := os.ReadFile(exe)
+	if err != nil {
+		return fmt.Errorf("reading this binary: %w", err)
+	}
+	note, stale := installNote(install.Installer{FS: install.OS{}}, want)
+	if note != "" {
+		if _, err := io.WriteString(w, note+"\n"); err != nil {
+			return fmt.Errorf("writing the report: %w", err)
+		}
+	}
+	if code != 0 || stale {
+		return exitCode(1)
 	}
 	return nil
+}
+
+// installNote compares the installed daemon with want. It returns the line
+// to print, and whether the install is stale, which is a failure of check.
+// No install is not a failure: the operator runs check before the first
+// install. A copy that matches needs no line.
+func installNote(in install.Installer, want []byte) (note string, stale bool) {
+	m, err := in.Installed(want)
+	if err != nil {
+		return fmt.Sprintf("cannot check the installed daemon: %v", err), true
+	}
+	switch m {
+	case install.NotInstalled:
+		return "not installed", false
+	case install.Same:
+		return "", false
+	case install.Different:
+		return "the installed daemon differs from this binary: run sudo tsunderlay install", true
+	case install.MatchUnspecified:
+		panic("check: Installed returned MatchUnspecified")
+	default:
+		panic(fmt.Sprintf("check: unknown install match %d", m))
+	}
 }
 
 func report(f underlay.Facts, hosts []string, dnsErr error, plan []underlay.Action, blocked []underlay.Blocked) string {

@@ -36,15 +36,9 @@ uses the default.`,
 			if cmd.Flags().Changed("control-url") {
 				jobURLs = urls
 			}
-			exe, err := os.Executable()
+			exe, err := executable()
 			if err != nil {
-				return fmt.Errorf("finding this binary: %w", err)
-			}
-			// Homebrew links the binary from its prefix. Copy the file, not
-			// the link.
-			exe, err = filepath.EvalSymlinks(exe)
-			if err != nil {
-				return fmt.Errorf("resolving this binary: %w", err)
+				return err
 			}
 			in := install.Installer{FS: install.OS{}, Launchd: install.Launchctl{}, EUID: os.Geteuid()}
 			return in.Install(cmd.Context(), cmd.OutOrStdout(), exe, jobURLs)
@@ -52,4 +46,18 @@ uses the default.`,
 	}
 	addControlURLFlag(cmd, &urls)
 	return cmd
+}
+
+// executable returns the path of this binary. Homebrew links the binary
+// from its prefix, so the path is the file, not the link.
+func executable() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("finding this binary: %w", err)
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return "", fmt.Errorf("resolving this binary: %w", err)
+	}
+	return exe, nil
 }
