@@ -53,9 +53,12 @@ mv -f "$f.tmp" "$f"
 '''
 
 [tasks."vm:e2e:build"]
-description = "Compile the end-to-end test binary with the guest-only tests for darwin/arm64"
+description = "Compile the end-to-end test binary with the guest-only tests, and the daemon that they run, for darwin/arm64"
 env = { GOOS = "darwin", GOARCH = "arm64", CGO_ENABLED = "0" }
-run = "go test -c -tags e2e,e2e_guest -o bin/e2e-guest.test ./e2e"
+run = [
+  "go test -c -tags e2e,e2e_guest -o bin/e2e-guest.test ./e2e",
+  "go build -o bin/tsunderlay .",
+]
 
 [tasks."vm:e2e"]
 description = "Run all end-to-end tests in a headless tart guest. Clone and start the guest when necessary"
@@ -89,6 +92,7 @@ tart exec "$vm" sudo env \
   PATH=/usr/bin:/bin:/usr/sbin:/sbin \
   TSUNDERLAY_E2E_DISPOSABLE=1 \
   TSUNDERLAY_E2E_STRICT=1 \
+  TSUNDERLAY_E2E_DAEMON="/Volumes/My Shared Files/tsunderlay/bin/tsunderlay" \
   "/Volumes/My Shared Files/tsunderlay/bin/e2e-guest.test" -test.v
 '''
 

@@ -44,6 +44,17 @@ func RequireCommand(t testing.TB, name string) {
 	}
 }
 
+// RequireEnv returns the value of the environment variable name. It skips
+// the test when the value is empty.
+func RequireEnv(t testing.TB, name string) string {
+	t.Helper()
+	v := os.Getenv(name)
+	if v == "" {
+		unmet(t, name+" is not set")
+	}
+	return v
+}
+
 func unmet(t testing.TB, reason string) {
 	t.Helper()
 	if os.Getenv(EnvStrict) == "1" {

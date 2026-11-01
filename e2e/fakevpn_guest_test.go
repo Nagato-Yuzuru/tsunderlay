@@ -28,10 +28,13 @@ const (
 	hostsPath   = "/etc/hosts"
 )
 
-// mapControlHost maps controlHost to controlAddr in /etc/hosts and restores
-// the file when the test ends. The pure Go resolver of a CGO_ENABLED=0
-// binary reads /etc/hosts, so a dial by name gets controlAddr.
-func mapControlHost(t *testing.T) {
+// hostsFile edits /etc/hosts. The pure Go resolver of a CGO_ENABLED=0
+// binary reads /etc/hosts, so a lookup of a mapped name gets the mapped
+// address.
+type hostsFile struct{ orig []byte }
+
+// editHosts saves /etc/hosts and restores it when the test ends.
+func editHosts(t *testing.T) *hostsFile {
 	t.Helper()
 	orig, err := os.ReadFile(hostsPath)
 	if err != nil {
@@ -42,10 +45,34 @@ func mapControlHost(t *testing.T) {
 			t.Errorf("restore %s: %v", hostsPath, err)
 		}
 	})
-	mapped := append(append([]byte{}, orig...), []byte("\n"+controlAddr+" "+controlHost+"\n")...)
-	if err := os.WriteFile(hostsPath, mapped, 0o644); err != nil {
+	return &hostsFile{orig: orig}
+}
+
+// Map sets the original file plus one line that maps host to addr. It
+// replaces the line of an earlier Map.
+func (h *hostsFile) Map(t *testing.T, host, addr string) {
+	t.Helper()
+	h.write(t, append(append([]byte{}, h.orig...), []byte("\n"+addr+" "+host+"\n")...))
+}
+
+// Unmap sets the original file.
+func (h *hostsFile) Unmap(t *testing.T) {
+	t.Helper()
+	h.write(t, h.orig)
+}
+
+func (h *hostsFile) write(t *testing.T, b []byte) {
+	t.Helper()
+	if err := os.WriteFile(hostsPath, b, 0o644); err != nil {
 		t.Fatalf("write %s: %v", hostsPath, err)
 	}
+}
+
+// mapControlHost maps controlHost to controlAddr in /etc/hosts until the
+// test ends.
+func mapControlHost(t *testing.T) {
+	t.Helper()
+	editHosts(t).Map(t, controlHost, controlAddr)
 	addrs, err := net.DefaultResolver.LookupHost(t.Context(), controlHost)
 	if err != nil || len(addrs) != 1 || addrs[0] != controlAddr {
 		t.Fatalf("LookupHost(%s) = %v, %v; want [%s]", controlHost, addrs, err, controlAddr)
