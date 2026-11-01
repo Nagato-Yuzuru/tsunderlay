@@ -77,32 +77,45 @@ depends = ["e2e:build"]
 run = "go test -c -tags e2e,e2e_guest -o bin/e2e-guest.test ./e2e"
 
 [tasks."vm:e2e"]
-description = "Run all end-to-end tests in a headless tart guest. Clone and start the guest when necessary"
+description = "Run all end-to-end tests in a new headless tart guest. Delete the guest on a pass and keep it on a failure"
 depends = ["vm:e2e:build"]
-usage = 'arg "[vm]" help="Name of the tart guest" default="tsunderlay-e2e"'
-# The guest-only tests add global routes (0/1, 128/1), so they run only in
-# the guest. The base image has passwordless sudo and the tart guest agent,
-# which `tart exec` needs. `tart exec` does not use the guest network, so it
-# keeps working while those routes are in place. The guest sees the
+# Each run clones the pinned image to a new guest. Thus no state from an
+# earlier run can change the result: not a daemon or an /etc/hosts line that
+# an interrupted test left, and not a stale copy of a binary in the shared
+# folder. The guest-only tests add global routes (0/1, 128/1), so they run
+# only in the guest. The base image has passwordless sudo and the tart guest
+# agent, which `tart exec` needs. `tart exec` does not use the guest network,
+# so it keeps working while those routes are in place. The guest sees the
 # repository read-only at /Volumes/My Shared Files/tsunderlay.
 run = '''
-vm="${usage_vm}"
-if ! tart list --quiet --source local | grep -qx "$vm"; then
-  tart clone "$TSUNDERLAY_VM_IMAGE" "$vm"
-fi
-if ! tart exec "$vm" true 2>/dev/null; then
-  nohup tart run --no-graphics --dir="tsunderlay:{{config_root}}:ro" "$vm" \
-    >"{{config_root}}/bin/$vm.log" 2>&1 &
-  tries=0
-  until tart exec "$vm" true 2>/dev/null; do
-    tries=$((tries + 1))
-    if [ "$tries" -ge 90 ]; then
-      echo "guest $vm is not ready after 180 s; see bin/$vm.log" >&2
-      exit 1
-    fi
-    sleep 2
-  done
-fi
+vm="tsunderlay-e2e-$(date +%Y%m%d-%H%M%S)-$$"
+log="{{config_root}}/bin/$vm.log"
+# The guest runs as a background job, which ignores SIGINT. Thus the EXIT
+# trap stops the guest on each exit, also after Ctrl-C.
+finish() {
+  rc=$?
+  tart stop "$vm" >/dev/null 2>&1 || true
+  if [ "$rc" -eq 0 ]; then
+    tart delete "$vm"
+    rm -f "$log"
+  else
+    echo "kept guest $vm (log: bin/$vm.log). Delete it with: tart delete $vm" >&2
+  fi
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+tart clone "$TSUNDERLAY_VM_IMAGE" "$vm"
+tart run --no-graphics --dir="tsunderlay:{{config_root}}:ro" "$vm" >"$log" 2>&1 &
+tries=0
+until tart exec "$vm" true 2>/dev/null; do
+  tries=$((tries + 1))
+  if [ "$tries" -ge 90 ]; then
+    echo "guest $vm is not ready after 180 s" >&2
+    exit 1
+  fi
+  sleep 2
+done
 # The guest is disposable, so the marker file goes into the guest only.
 tart exec "$vm" sudo touch /var/db/tsunderlay-e2e-disposable
 # The guest agent's PATH does not include /sbin, where ifconfig and route are.
