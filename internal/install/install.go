@@ -1,12 +1,14 @@
-// Package install installs the daemon as a launchd job. The job runs a
-// root-owned copy of the binary, never the Homebrew binary: the Homebrew
-// prefix is writable by the user, so a root job that runs it gives root to
-// any process of the user at the next restart.
+// Package install installs the daemon as a launchd job, and uninstalls it.
+// The job runs a root-owned copy of the binary, never the Homebrew binary:
+// the Homebrew prefix is writable by the user, so a root job that runs it
+// gives root to any process of the user at the next restart.
 //
 // Install compares each file with the state on disk and changes only the
 // difference, so a repeat run with the same binary and flags changes
-// nothing. The file system and launchctl are dependencies of Installer, so
-// that tests run without root and without launchd.
+// nothing. Uninstall removes only what exists, so a repeat run removes
+// nothing. The file system, launchctl, and the routing table are
+// dependencies of Installer and Uninstaller, so that tests run without root,
+// without launchd, and without a change to the routes of the host.
 package install
 
 import (
@@ -42,8 +44,8 @@ const (
 	// after launchctl applied the change. When the mark is present, the next
 	// install reloads the job, also when the files are already correct.
 	PendingPath = BinaryPath + ".pending"
-	// LockPath is the lock file of Install. Two installs at the same time
-	// run one after the other.
+	// LockPath is the lock file of Install and Uninstall. Two of them at the
+	// same time run one after the other.
 	LockPath = BinaryPath + ".lock"
 	// LogPath receives the standard error of the daemon.
 	LogPath = "/var/log/tsunderlay.log"
@@ -61,13 +63,32 @@ const (
 
 var (
 	// ErrNotRoot means that the process does not run with effective uid 0.
-	ErrNotRoot = errors.New("install needs root; run it with sudo")
+	ErrNotRoot = errors.New("this command needs root; run it with sudo")
 	// ErrUnsafeDir means that a user other than root can change a directory
 	// on the path to an installed file, or that the path has a symbolic link.
 	ErrUnsafeDir = errors.New("a user other than root can change the directory")
 	// ErrLaunchctl means that launchctl reported a failure.
 	ErrLaunchctl = errors.New("launchctl failed")
 )
+
+// tempPath is the temporary file that OS.WriteFile writes before it
+// renames it to name. A crash during the write leaves it.
+func tempPath(name string) string {
+	return filepath.Join(filepath.Dir(name), "."+filepath.Base(name)+".tmp")
+}
+
+// writtenFiles returns each file that Install writes, and the temporary
+// file of each write, with the plist first. The environment file of the
+// system app is not in the list: it belongs to the system app, and only its
+// temporary file is a file of tsunderlay.
+func writtenFiles() []string {
+	return []string{
+		PlistPath, tempPath(PlistPath),
+		BinaryPath, tempPath(BinaryPath),
+		PendingPath, tempPath(PendingPath),
+		tempPath(SystemAppEnvPath),
+	}
+}
 
 // FileStat is the type, the owner, and the mode of a file.
 type FileStat struct {
@@ -202,7 +223,7 @@ const (
 // read. A missing binary or a missing HelperDir is NotInstalled, not an
 // error.
 func (in Installer) Installed(want []byte) (Match, error) {
-	err := in.checkDirs(HelperDir)
+	err := checkDirs(in.FS, HelperDir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return NotInstalled, nil
 	}
@@ -278,7 +299,7 @@ func (in Installer) state(ctx context.Context, source string, controlURLs []stri
 	if st.plistChanged, err = in.differs(PlistPath, st.plist, plistPerm); err != nil {
 		return st, err
 	}
-	if st.pending, err = in.exists(PendingPath); err != nil {
+	if st.pending, err = exists(in.FS, PendingPath); err != nil {
 		return st, err
 	}
 	loaded, err := in.Launchd.Loaded(ctx, Service)
@@ -351,22 +372,28 @@ func (in Installer) bootstrap(ctx context.Context) error {
 }
 
 // prepareDirs checks the directories of the installed files, and makes
-// HelperDir when it is missing. Only root can add an entry to a safe
-// /Library, so no other process can make HelperDir first.
+// HelperDir when it is missing.
 func (in Installer) prepareDirs() error {
-	if err := in.checkDirs(DaemonDir); err != nil {
+	if err := checkDirs(in.FS, DaemonDir); err != nil {
 		return err
 	}
-	err := in.checkDirs(HelperDir)
+	return prepareHelperDir(in.FS)
+}
+
+// prepareHelperDir checks HelperDir, and makes it when it is missing. Only
+// root can add an entry to a safe /Library, so no other process can make
+// HelperDir first.
+func prepareHelperDir(fsys FS) error {
+	err := checkDirs(fsys, HelperDir)
 	if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	// checkDirs goes from / down and stops at the first missing directory,
 	// so HelperDir is the missing one when its parent exists.
-	if err := in.FS.Mkdir(HelperDir, helperDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+	if err := fsys.Mkdir(HelperDir, helperDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
 		return fmt.Errorf("making %s: %w", HelperDir, err)
 	}
-	return in.checkDirs(HelperDir)
+	return checkDirs(fsys, HelperDir)
 }
 
 // checkDirs returns ErrUnsafeDir when a directory from / to dir is not a
@@ -378,7 +405,7 @@ func (in Installer) prepareDirs() error {
 // The check reads only the mode bits, not an ACL. Only root can add an ACL
 // to a root-owned directory, a stock macOS has none on these directories,
 // and the check guards against a writer that is not root.
-func (in Installer) checkDirs(dir string) error {
+func checkDirs(fsys FS, dir string) error {
 	var chain []string
 	for d := dir; ; d = filepath.Dir(d) {
 		chain = append(chain, d)
@@ -388,12 +415,12 @@ func (in Installer) checkDirs(dir string) error {
 	}
 	for i := len(chain) - 1; i >= 0; i-- {
 		d := chain[i]
-		st, err := in.FS.Lstat(d)
+		st, err := fsys.Lstat(d)
 		if err != nil {
 			return fmt.Errorf("checking %s: %w", d, err)
 		}
 		if !st.Mode.IsDir() || st.UID != 0 || st.Mode.Perm()&unsafeBits != 0 {
-			return fmt.Errorf("%w: %s (owner uid %d, mode %v); the installed daemon runs as root, so install refuses it",
+			return fmt.Errorf("%w: %s (owner uid %d, mode %v); the installed daemon runs as root, so tsunderlay refuses it",
 				ErrUnsafeDir, d, st.UID, st.Mode)
 		}
 	}
@@ -421,8 +448,8 @@ func (in Installer) differs(name string, want []byte, perm fs.FileMode) (bool, e
 	return !bytes.Equal(got, want), nil
 }
 
-func (in Installer) exists(name string) (bool, error) {
-	_, err := in.FS.Lstat(name)
+func exists(fsys FS, name string) (bool, error) {
+	_, err := fsys.Lstat(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
