@@ -23,9 +23,9 @@ const (
 // bindByRoute is the one setting that Install adds to the file of another
 // app. The network extension binds each dial to the default interface. With
 // this setting it looks up the route of each dial, so the dial follows the
-// routes of this daemon. It works around
-// https://github.com/tailscale/tailscale/issues/21198. Remove the line
-// when the extension stops binding by default.
+// routes of this daemon. It is a stopgap part: underlay.Parts names the
+// upstream issue that retires it. Remove the line when the extension stops
+// binding by default.
 const (
 	bindByRouteKey = "TS_BIND_TO_INTERFACE_BY_ROUTE"
 	bindByRoute    = bindByRouteKey + "=true"

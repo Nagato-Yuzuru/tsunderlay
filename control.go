@@ -15,8 +15,11 @@ import (
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
 )
 
-// defaultControlURL is the control plane of tailscale.com.
-const defaultControlURL = "https://controlplane.tailscale.com"
+// The control plane of tailscale.com.
+const (
+	defaultControlHost = "controlplane.tailscale.com"
+	defaultControlURL  = "https://" + defaultControlHost
+)
 
 const dnsTimeout = 5 * time.Second
 
@@ -68,4 +71,14 @@ func resolveControl(ctx context.Context, lookup lookupFunc, hosts []string) (und
 	}
 	c := underlay.Control{Prefixes: underlay.ControlPrefixes(addrs), Complete: len(errs) == 0}
 	return c, errors.Join(errs...)
+}
+
+// undocumentedControl returns the resolved prefixes that are not in the list
+// of the Tailscale firewall documentation. Only the default control URL has
+// such a list: hosts of a self-hosted control server give no result.
+func undocumentedControl(hosts []string, ps []netip.Prefix) []netip.Prefix {
+	if !slices.Equal(hosts, []string{defaultControlHost}) {
+		return nil
+	}
+	return underlay.UndocumentedControl(ps)
 }

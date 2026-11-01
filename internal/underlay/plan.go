@@ -80,6 +80,37 @@ func plan(f Facts) ([]Action, []Blocked) {
 	return actions, blocked
 }
 
+// The upstream issues that retire the stopgap parts. Each part exists
+// because of one upstream defect. When the fix ships, delete the part.
+const (
+	// bindByRouteIssue: the system app binds each dial to the default
+	// interface, and its lookup of the route of a dial does not follow a
+	// point-to-point next hop. It retires R2 and the env file line.
+	bindByRouteIssue = "https://github.com/tailscale/tailscale/issues/21198"
+	// rexBoundNode: the Rex embedded node starts bound to the LAN interface.
+	// It retires R1. The upstream request is not public, so it has no URL.
+	rexBoundNode = "Rex: embedded node starts bound to the interface"
+)
+
+// Part is a stopgap part of tsunderlay with the upstream fix that retires
+// it.
+type Part struct {
+	Name string
+	// Upstream is the URL of the upstream issue, or a description when the
+	// issue is not public.
+	Upstream string
+}
+
+// Parts returns the stopgap parts. The rules that make R1 and R2 are in
+// desired, and install writes the env file line.
+func Parts() []Part {
+	return []Part{
+		{Name: "R1 (scoped control routes, for the Rex node)", Upstream: rexBoundNode},
+		{Name: "R2 (host route to the VPN next hop, for the system app)", Upstream: bindByRouteIssue},
+		{Name: "env file line TS_BIND_TO_INTERFACE_BY_ROUTE=true (for the system app)", Upstream: bindByRouteIssue},
+	}
+}
+
 func desired(f Facts) []Route {
 	vpn, ok := f.VPN.(SplitDefault)
 	if !ok {
@@ -99,8 +130,8 @@ func desired(f Facts) []Route {
 	// R1. Rex's embedded node binds its sockets to the LAN interface until
 	// its first netmap removes the binding, so its first control dial needs a
 	// scoped route.
-	// Upstream: Rex Beta Discord #feedback, "Tailscale for outbound
-	// connections".
+	// Upstream: rexBoundNode (see Parts). The Rex Beta Discord #feedback
+	// thread "Tailscale for outbound connections" is not public.
 	if f.LAN != nil {
 		for _, p := range controlPrefixes(f) {
 			want = append(want, Route{Dst: p, Iface: f.LAN.Iface, Scoped: true, Via: f.LAN.Gateway, Owned: true})

@@ -81,9 +81,16 @@ func report(f underlay.Facts, hosts []string, dnsErr error, plan []underlay.Acti
 		"lan:     " + lan(f.LAN),
 		"vpn:     " + vpn(f.VPN),
 	}
+	lines = append(lines, block("tunnels:", tunnelLines(underlay.Tunnels(f)))...)
 	lines = append(lines, fmt.Sprintf("control: %s -> %s", strings.Join(hosts, ", "), joinPrefixes(f.Control.Prefixes)))
 	if dnsErr != nil {
 		lines = append(lines, fmt.Sprintf("         no answer: %v; owned control routes stay", strings.ReplaceAll(dnsErr.Error(), "\n", "; ")))
+	}
+	for _, p := range undocumentedControl(hosts, f.Control.Prefixes) {
+		lines = append(lines, fmt.Sprintf("warning: control prefix %s is not in the list of %s", p, underlay.FirewallDocURL))
+	}
+	for _, o := range underlay.Overlaps(f) {
+		lines = append(lines, "warning: "+overlapLine(o))
 	}
 	for _, b := range blockedLines(blocked) {
 		lines = append(lines, "blocked: "+b)
@@ -96,7 +103,68 @@ func report(f underlay.Facts, hosts []string, dnsErr error, plan []underlay.Acti
 			lines = append(lines, "  "+routecmd.Line(a))
 		}
 	}
+	lines = append(lines, block("retire:", partLines(underlay.Parts()))...)
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// block puts label before the first line and indents the others under it.
+// It gives "label none" for no lines.
+func block(label string, lines []string) []string {
+	if len(lines) == 0 {
+		lines = []string{"none"}
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		prefix := strings.Repeat(" ", len("control: "))
+		if i == 0 {
+			prefix = fmt.Sprintf("%-9s", label)
+		}
+		out[i] = prefix + l
+	}
+	return out
+}
+
+func tunnelLines(ts []underlay.Tunnel) []string {
+	lines := make([]string, len(ts))
+	for i, t := range ts {
+		lines[i] = t.Iface + ": " + tunnelClass(t.Class)
+	}
+	return lines
+}
+
+func tunnelClass(c underlay.TunnelClass) string {
+	switch c := c.(type) {
+	case underlay.Followed:
+		return "split default (0/1 and 128.0/1); tsunderlay follows it"
+	case underlay.SplitHalf:
+		return "holds one half of an ambiguous split default; no change"
+	case underlay.GlobalDefault:
+		return "global default; the LAN has no global default, so no R1"
+	case underlay.ScopedDefault:
+		return "interface-scoped default; only sockets bound to it use it"
+	case underlay.SplitTunnel:
+		return "split tunnel: " + joinPrefixes(c.Prefixes)
+	case underlay.OwnNetwork:
+		return "routes its own network only, as a second full-tunnel VPN without 0/1 and 128.0/1 does"
+	default:
+		panic(fmt.Sprintf("check: unknown tunnel class %T", c))
+	}
+}
+
+func overlapLine(o underlay.Overlap) string {
+	what := "control prefix " + o.With.String()
+	if o.With == underlay.CGNAT() {
+		what = "the Tailscale CGNAT range " + o.With.String()
+	}
+	return fmt.Sprintf("%s on %s overlaps %s; tsunderlay does not fix this", o.Route.Dst, o.Route.Iface, what)
+}
+
+func partLines(ps []underlay.Part) []string {
+	lines := make([]string, len(ps))
+	for i, p := range ps {
+		lines[i] = p.Name + ": " + p.Upstream
+	}
+	return lines
 }
 
 // status is the exit code of check. Three states have no plan, but are not
