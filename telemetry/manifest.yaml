@@ -1,0 +1,9 @@
+# The registry of the log attributes that tsunderlay emits.
+file_format: definition_manifest/2.0
+description: Log attributes of the tsunderlay daemon.
+schema_url: https://github.com/Nagato-Yuzuru/tsunderlay/schemas/1.0.0
+stability: development
+dependencies:
+  # The generated Go code imports the semconv package of this version.
+  - schema_url: https://opentelemetry.io/schemas/1.43.0
+    registry_path: https://github.com/open-telemetry/semantic-conventions@v1.43.0[model]

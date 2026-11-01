@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
-
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/routecmd"
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
 )
@@ -96,7 +94,7 @@ func (d *daemon) reconcile(ctx context.Context, trigger string) time.Duration {
 	if err != nil {
 		d.log.LogAttrs(ctx, slog.LevelError, "reconcile failed",
 			slog.String(attrTrigger, trigger),
-			slog.String(string(semconv.ErrorTypeKey), errTypeRIB),
+			slog.String(attrErrorType, errTypeRIB),
 			slog.String("error", err.Error()))
 		return 0
 	}
@@ -143,7 +141,7 @@ func (d *daemon) reconcile(ctx context.Context, trigger string) time.Duration {
 		slog.Int64(attrDurationMS, time.Since(start).Milliseconds()),
 	}
 	if level == slog.LevelError {
-		attrs = append(attrs, slog.String(string(semconv.ErrorTypeKey), errTypeRoute))
+		attrs = append(attrs, slog.String(attrErrorType, errTypeRoute))
 		d.log.LogAttrs(ctx, level, "route change failed", attrs...)
 		return d.retryDelay
 	}

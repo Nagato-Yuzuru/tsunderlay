@@ -14,7 +14,6 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/rib"
@@ -52,8 +51,8 @@ func runDaemon(ctx context.Context, log *slog.Logger, urls, hosts []string) erro
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	log.LogAttrs(ctx, slog.LevelInfo, "start",
-		slog.String(string(semconv.ServiceNameKey), "tsunderlay"),
-		slog.String(string(semconv.ServiceVersionKey), version()),
+		slog.String(attrServiceName, "tsunderlay"),
+		slog.String(attrServiceVersion, version()),
 		slog.Any(attrControlURLs, urls))
 
 	d := &daemon{

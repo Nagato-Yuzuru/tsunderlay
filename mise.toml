@@ -1,6 +1,7 @@
 [tools]
 git-cliff = "2.14.2"
 go = "1.27.3"
+"github:open-telemetry/weaver" = "0.28.0"
 "go:golang.org/x/vuln/cmd/govulncheck" = "1.9.0"
 golangci-lint = "2.15.0"
 jactionlint = "2.3.0"
