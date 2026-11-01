@@ -57,6 +57,9 @@ jobs:
           key: gocache-${{ runner.os }}-${{ github.sha }}
           restore-keys: gocache-${{ runner.os }}-
       - run: go test -race ./...
+      # The daemon code is darwin-only, so only macOS can emit its events.
+      - if: ${{ matrix.os == 'macos-latest' }}
+        run: mise run telemetry:live-check
 
   e2e:
     name: e2e (macOS, root)
