@@ -161,10 +161,13 @@ func newHost() *host {
 			"/Library": rootDir,
 			DaemonDir:  rootDir,
 			HelperDir:  helperDir,
+			// The system app is installed, and its file is right already.
+			SystemAppContainer: rootDir,
 		},
 		events: &h.events,
 		lock:   make(chan struct{}, 1),
 	}
+	h.fs.files[SystemAppEnvPath] = file{data: []byte(bindByRoute + "\n"), st: FileStat{Mode: 0o644}}
 	h.ld = &fakeLaunchd{events: &h.events}
 	return h
 }
