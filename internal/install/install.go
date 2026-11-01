@@ -126,13 +126,20 @@ type Installer struct {
 // becomes one --control-url argument of the job. Install writes one line to
 // w for each change, or "no change".
 //
+// Install also makes sure that the environment file of the system Tailscale
+// app holds TS_BIND_TO_INTERFACE_BY_ROUTE=true. After a change of that
+// file, it prints the command that restarts the network extension. It does
+// not run the command: the restart drops the system node for some seconds.
+// Install skips the file when the system app has no container.
+//
 // Install makes HelperDir when it is missing. It holds the lock at LockPath
 // from the first read of the installation to the end.
 //
 // Errors: ErrNotRoot without root; ErrUnsafeDir when a user other than root
 // can change a directory on the path to an installed file, before Install
 // reads or writes a file of the installation; ErrLaunchctl when launchctl
-// fails.
+// fails; ErrEnvNotRegular when the environment file of the system app is
+// not a regular file.
 func (in Installer) Install(ctx context.Context, w io.Writer, source string, controlURLs []string) (err error) {
 	if in.EUID != 0 {
 		return ErrNotRoot
@@ -161,6 +168,9 @@ func (in Installer) Install(ctx context.Context, w io.Writer, source string, con
 		if err := in.FS.Remove(PendingPath); err != nil {
 			return fmt.Errorf("removing the change mark: %w", err)
 		}
+	}
+	if err := in.setSystemAppEnv(&r); err != nil {
+		return err
 	}
 	if !r.changed {
 		r.printf("no change")
@@ -432,6 +442,11 @@ type reporter struct {
 
 func (r *reporter) printf(format string, args ...any) {
 	r.changed = true
+	r.note(format, args...)
+}
+
+// note writes a line that is not a change.
+func (r *reporter) note(format string, args ...any) {
 	if _, err := fmt.Fprintf(r.w, format+"\n", args...); err != nil && r.err == nil {
 		r.err = fmt.Errorf("writing the report: %w", err)
 	}

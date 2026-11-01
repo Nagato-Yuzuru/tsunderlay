@@ -47,6 +47,12 @@ func TestInstall(t *testing.T) {
 		t.Fatalf("launchd has %s before the test (loaded %v, %v); the test needs a host without it", install.Service, loaded, err)
 	}
 	t.Cleanup(func() { uninstall(t) })
+	// A host without the system Tailscale app gets a skip line from each
+	// install. After the first install, a host with the app gets no line.
+	skipped := ""
+	if _, err := os.Lstat(install.SystemAppContainer); errors.Is(err, fs.ErrNotExist) {
+		skipped = "the system Tailscale app is not installed: skipped " + install.SystemAppEnvPath + "\n"
+	}
 
 	t.Log("first install")
 	at := logSize(t)
@@ -68,14 +74,14 @@ func TestInstall(t *testing.T) {
 	waitStart(t, at, []string{"https://controlplane.tailscale.com"})
 
 	t.Log("second install with the same binary and flags")
-	if out := tsunderlay(t, bin, "install"); out != "no change\n" {
-		t.Errorf("second install output = %q, want %q", out, "no change\n")
+	if out, want := tsunderlay(t, bin, "install"), skipped+"no change\n"; out != want {
+		t.Errorf("second install output = %q, want %q", out, want)
 	}
 
 	t.Log("upgrade: install from a binary with other bytes")
 	at = logSize(t)
 	out = tsunderlay(t, next, "install")
-	if want := "copied " + next + " to " + install.BinaryPath + "\nrestarted " + install.Service + "\n"; out != want {
+	if want := "copied " + next + " to " + install.BinaryPath + "\nrestarted " + install.Service + "\n" + skipped; out != want {
 		t.Errorf("upgrade output = %q, want %q", out, want)
 	}
 	waitStart(t, at, []string{"https://controlplane.tailscale.com"})
@@ -84,7 +90,7 @@ func TestInstall(t *testing.T) {
 	url := "https://hs.example.com"
 	at = logSize(t)
 	out = tsunderlay(t, next, "install", "--control-url", url)
-	if want := "wrote " + install.PlistPath + "\nreloaded " + install.Service + "\n"; out != want {
+	if want := "wrote " + install.PlistPath + "\nreloaded " + install.Service + "\n" + skipped; out != want {
 		t.Errorf("new flags output = %q, want %q", out, want)
 	}
 	waitStart(t, at, []string{url})
