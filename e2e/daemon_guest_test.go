@@ -270,3 +270,77 @@ func TestDaemonConvergesFromAHalfAppliedTable(t *testing.T) {
 		})
 	}
 }
+
+// TestDaemonFollowsTheFirstTunnelWhenASecondFullTunnelVPNComesUp runs the
+// OpenVPN route commands of a second VPN B while the VPN A holds the global
+// routes. The kernel refuses both adds with "File exists" and keeps the
+// routes of A, so the global routes do not split and the daemon keeps R2 on
+// A. When A goes down, no tunnel holds the global routes, because B never
+// got them, so the daemon deletes its routes.
+func TestDaemonFollowsTheFirstTunnelWhenASecondFullTunnelVPNComesUp(t *testing.T) {
+	lan, _, d, a := upScenario(t)
+	b := testnet.NewSecondFakeVPN(t)
+	for _, l := range b.RouteLog() {
+		t.Logf("%s", l)
+		if !strings.Contains(l, "File exists") {
+			t.Errorf("B route command: %q; want the kernel to refuse it with \"File exists\"", l)
+		}
+	}
+	requireDaemonStaysOn(t, lan, d, a, b)
+
+	a.Disconnect(t)
+	table := waitTable(t, changeWithin, "no owned route", func(table []underlay.Route) bool {
+		return len(ownedRoutes(table)) == 0
+	})
+	for _, r := range table {
+		if r.Dst.Bits() == 1 {
+			t.Errorf("route %+v after A went down; want no /1 route", r)
+		}
+	}
+	code, out := d.check(t)
+	t.Logf("check exit %d:\n%s", code, out)
+	if code != 0 || !strings.Contains(out, "vpn:     none") {
+		t.Errorf("tsunderlay check exit %d, want 0 with \"vpn:     none\":\n%s", code, out)
+	}
+}
+
+// requireDaemonStaysOn checks the state after B came up: the global routes
+// stay on a, nothing in the table belongs to b, and the daemon keeps R1 and
+// R2 for a.
+func requireDaemonStaysOn(t *testing.T, lan underlay.Link, d *daemonProc, a, b *testnet.FakeVPN) {
+	t.Helper()
+	aRoutes := []underlay.Route{
+		{Dst: netip.MustParsePrefix("0.0.0.0/1"), Iface: a.Iface(), Via: a.Gateway()},
+		{Dst: netip.MustParsePrefix("128.0.0.0/1"), Iface: a.Iface(), Via: a.Gateway()},
+	}
+	d.poke(t)
+	table := fetch(t)
+	for _, r := range table {
+		if r.Dst.Bits() == 1 {
+			t.Logf("rib.Fetch %+v", r)
+		}
+	}
+	if !hasAll(aRoutes...)(table) {
+		t.Errorf("the global routes of %s are gone: want %+v", a.Iface(), aRoutes)
+	}
+	for _, r := range table {
+		if r.Dst.Bits() == 1 && r.Iface == b.Iface() {
+			t.Errorf("route %+v on %s: B should hold no /1 route", r, b.Iface())
+		}
+	}
+	want := []underlay.Route{wantR1(lan, controlNet), wantR2(a)}
+	if owned := ownedRoutes(table); !hasAll(want...)(owned) || len(owned) != len(want) {
+		t.Errorf("owned routes = %+v, want only %+v", owned, want)
+	}
+	requireR2Path(t, a)
+	for _, e := range d.events() {
+		if strings.HasPrefix(e.VPN, "ambiguous") {
+			t.Errorf("the daemon saw an ambiguous VPN: %+v", e)
+		}
+	}
+	code, out := d.check(t)
+	t.Logf("check exit %d:\n%s", code, out)
+	if want := "vpn:     " + a.Iface() + " via " + a.Gateway().String(); code != 0 || !strings.Contains(out, want) {
+		t.Errorf("tsunderlay check exit %d, want 0 with %q:\n%s", code, want, out)
+	}
+}

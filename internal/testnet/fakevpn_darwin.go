@@ -5,6 +5,7 @@ package testnet
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/netip"
 	"os/exec"
 	"strings"
@@ -14,13 +15,16 @@ import (
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/routecmd"
 )
 
-// The addresses of the fake VPN, in 198.18.0.0/15 (RFC 2544).
-const (
-	vpnLocal   = "198.18.64.2"
-	vpnGateway = "198.18.64.1"
-	vpnNet     = "198.18.64.0/20"
-	vpnNetmask = "255.255.240.0"
-)
+// vpnAddrs are the addresses of a fake VPN, in 198.18.0.0/15 (RFC 2544).
+type vpnAddrs struct{ local, gateway, net, netmask string }
+
+func firstVPN() vpnAddrs {
+	return vpnAddrs{local: "198.18.64.2", gateway: "198.18.64.1", net: "198.18.64.0/20", netmask: "255.255.240.0"}
+}
+
+func secondVPN() vpnAddrs {
+	return vpnAddrs{local: "198.18.96.2", gateway: "198.18.96.1", net: "198.18.96.0/20", netmask: "255.255.240.0"}
+}
 
 // fullTunnel holds the two halves of the IPv4 address space. Together they
 // are more specific than the default route, so they take all traffic
@@ -36,23 +40,46 @@ func fullTunnel() []string { return []string{"0.0.0.0/1", "128.0.0.0/1"} }
 // tag keeps this type out of every build that can run on a real host or CI;
 // only the tart guest of `mise run vm:e2e` builds it.
 type FakeVPN struct {
-	utun *UTUN
+	utun  *UTUN
+	addrs vpnAddrs
+	// second is true for a VPN that comes up beside another one. The kernel
+	// may reject its global routes, so connect records the output of each
+	// route command and does not fail. Disconnect then leaves the global
+	// routes to the kernel: a delete by destination could remove the
+	// routes of the first VPN.
+	second   bool
+	routeLog []string
 }
 
 // NewFakeVPN connects the fake VPN and registers its removal with t.Cleanup.
 func NewFakeVPN(t testing.TB) *FakeVPN {
 	t.Helper()
-	v := &FakeVPN{}
+	v := &FakeVPN{addrs: firstVPN()}
 	v.connect(t)
 	t.Cleanup(func() { v.Disconnect(t) })
 	return v
 }
 
+// NewSecondFakeVPN connects a fake VPN with other addresses and a second
+// utun, for a test that has a first one up. It does not fail when the
+// kernel rejects its global routes; RouteLog holds what the kernel said.
+func NewSecondFakeVPN(t testing.TB) *FakeVPN {
+	t.Helper()
+	v := &FakeVPN{addrs: secondVPN(), second: true}
+	v.connect(t)
+	t.Cleanup(func() { v.Disconnect(t) })
+	return v
+}
+
+// RouteLog returns each global route command of a second VPN with its
+// output, in the order that they ran.
+func (v *FakeVPN) RouteLog() []string { return v.routeLog }
+
 // Iface returns the name of the current utun.
 func (v *FakeVPN) Iface() string { return v.utun.Name }
 
 // Gateway returns the next hop of the global routes.
-func (v *FakeVPN) Gateway() netip.Addr { return netip.MustParseAddr(vpnGateway) }
+func (v *FakeVPN) Gateway() netip.Addr { return netip.MustParseAddr(v.addrs.gateway) }
 
 // WaitPacket reads the packets that leave through the current utun until
 // match accepts one. It returns false when no packet matches before timeout.
@@ -73,10 +100,15 @@ func (v *FakeVPN) Reconnect(t testing.TB) {
 func (v *FakeVPN) connect(t testing.TB) {
 	t.Helper()
 	v.utun = NewUTUN(t)
-	Ifconfig(t, v.utun.Name, vpnLocal, vpnLocal, "netmask", vpnNetmask, "up")
-	route(t, "-n", "add", "-net", vpnNet, vpnLocal)
+	a := v.addrs
+	Ifconfig(t, v.utun.Name, a.local, a.local, "netmask", a.netmask, "up")
+	route(t, "-n", "add", "-net", a.net, a.local)
 	for _, dst := range fullTunnel() {
-		route(t, "-n", "add", "-net", dst, vpnGateway)
+		if v.second {
+			v.routeLog = append(v.routeLog, routeRecord(t, "-n", "add", "-net", dst, a.gateway))
+			continue
+		}
+		route(t, "-n", "add", "-net", dst, a.gateway)
 	}
 }
 
@@ -88,10 +120,12 @@ func (v *FakeVPN) Disconnect(t testing.TB) {
 	if v.utun == nil {
 		return
 	}
-	for _, dst := range fullTunnel() {
-		routeDelete(t, dst)
+	if !v.second {
+		for _, dst := range fullTunnel() {
+			routeDelete(t, dst)
+		}
 	}
-	routeDelete(t, vpnNet)
+	routeDelete(t, v.addrs.net)
 	// After a Reconnect, the cleanup of NewUTUN for the new utun can run
 	// first. Close then does nothing.
 	v.utun.Close(t)
@@ -106,6 +140,17 @@ func route(t testing.TB, args ...string) {
 	if err != nil || bytes.Contains(out, []byte("writing to routing socket")) {
 		t.Fatalf("route %s: %v: %s", strings.Join(args, " "), err, out)
 	}
+}
+
+// routeRecord runs /sbin/route with args and returns the command line with
+// its output. It fails the test only when route does not run.
+func routeRecord(t testing.TB, args ...string) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), routecmd.Path, args...).CombinedOutput()
+	if _, ok := errors.AsType[*exec.ExitError](err); err != nil && !ok {
+		t.Fatalf("route %s: %v", strings.Join(args, " "), err)
+	}
+	return "route " + strings.Join(args, " ") + ": " + strings.TrimSpace(string(out))
 }
 
 // routeDelete deletes the network route dst. A route that is not in the
