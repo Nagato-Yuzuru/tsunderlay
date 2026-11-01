@@ -56,11 +56,27 @@ jobs:
           restore-keys: gocache-${{ runner.os }}-
       - run: go test -race ./...
 
+  e2e:
+    name: e2e (macOS, root)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      # The runner is disposable. Strict mode turns an unmet requirement into
+      # a failure, so that a broken runner cannot pass as a skip.
+      TSUNDERLAY_E2E_DISPOSABLE: "1"
+      TSUNDERLAY_E2E_STRICT: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9b200bcecbfd6303e69a4a261b2e09e3757440a7 # v5.2.0
+      - run: mise run e2e
+
   # The only required check of this workflow. A skipped job counts as
   # passed; a failed or cancelled job fails it. A new job must be added
   # to needs.
   ci-ok:
-    needs: [check, test]
+    needs: [check, test, e2e]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

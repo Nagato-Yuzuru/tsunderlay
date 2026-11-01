@@ -1,5 +1,9 @@
 version: "2"
 
+run:
+  # The end-to-end tests have their own build tag. Without it, lint skips them.
+  build-tags: [e2e]
+
 linters:
   default: none
   enable:

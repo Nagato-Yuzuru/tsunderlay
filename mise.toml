@@ -12,3 +12,18 @@ run = "golangci-lint run ./..."
 
 [tasks.test]
 run = "go test -race ./..."
+
+[tasks."e2e:build"]
+description = "Compile the end-to-end test binary for darwin/arm64"
+env = { GOOS = "darwin", GOARCH = "arm64", CGO_ENABLED = "0" }
+run = "go test -c -tags e2e -o bin/e2e.test ./e2e"
+
+[tasks.e2e]
+description = "Run the end-to-end tests as root on this host. Use only on a disposable host (CI, VM)"
+depends = ["e2e:build"]
+run = '''
+sudo env \
+  TSUNDERLAY_E2E_DISPOSABLE="${TSUNDERLAY_E2E_DISPOSABLE:-}" \
+  TSUNDERLAY_E2E_STRICT="${TSUNDERLAY_E2E_STRICT:-}" \
+  ./bin/e2e.test -test.v
+'''
