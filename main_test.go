@@ -21,6 +21,10 @@ func TestRun(t *testing.T) {
 		{name: "bash completion", args: []string{"completion", "bash"}, wantCode: 0, wantStdout: "bash completion"},
 		{name: "unknown command is a usage error", args: []string{"nope"}, wantCode: 2},
 		{name: "check takes no arguments", args: []string{"check", "extra"}, wantCode: 2},
+		// The argument checks run before the root check, so these cases
+		// never install, also as root.
+		{name: "install takes no arguments", args: []string{"install", "extra"}, wantCode: 2},
+		{name: "install rejects a control URL without a host", args: []string{"install", "--control-url", "https://"}, wantCode: 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

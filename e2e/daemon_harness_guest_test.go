@@ -31,8 +31,6 @@ import (
 // they run only in the tart guest of `mise run vm:e2e`.
 
 const (
-	// envDaemon names the tsunderlay binary. `mise run vm:e2e` sets it.
-	envDaemon = "TSUNDERLAY_E2E_DAEMON"
 	// daemonHost is the control host of the daemon. The .test domain never
 	// resolves in DNS (RFC 6761), so only /etc/hosts gives it an address.
 	daemonHost = "control.tsunderlay.test"
@@ -271,7 +269,7 @@ type daemonProc struct {
 // prints its log when the test failed.
 func startDaemon(t *testing.T, urls ...string) *daemonProc {
 	t.Helper()
-	bin := testenv.RequireEnv(t, envDaemon)
+	bin := testenv.RequireExecutable(t, testenv.EnvBinary)
 	testenv.RequireCommand(t, bin)
 	if len(urls) == 0 {
 		urls = []string{daemonControlURL()}

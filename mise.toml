@@ -23,18 +23,35 @@ run = "golangci-lint run ./..."
 run = "go test -race ./..."
 
 [tasks."e2e:build"]
-description = "Compile the end-to-end test binary for darwin/arm64"
+description = "Compile the end-to-end test binary and the tsunderlay binaries that it installs, for darwin/arm64"
 env = { GOOS = "darwin", GOARCH = "arm64", CGO_ENABLED = "0" }
-run = "go test -c -tags e2e -o bin/e2e.test ./e2e"
+# The install test upgrades from tsunderlay to tsunderlay-next. Only the
+# build ID makes their bytes differ.
+run = [
+  "go test -c -tags e2e -o bin/e2e.test ./e2e",
+  "go build -o bin/tsunderlay .",
+  "go build -ldflags=-buildid=e2e-next -o bin/tsunderlay-next .",
+]
 
 [tasks.e2e]
 description = "Run the end-to-end tests as root on this host. Use only on a disposable host (CI, VM)"
 depends = ["e2e:build"]
+# TestInstall runs alone, after the other tests. The daemon that it installs
+# deletes owned routes, so a daemon that its cleanup cannot stop must not
+# run during another test.
 run = '''
-sudo env \
-  TSUNDERLAY_E2E_DISPOSABLE="${TSUNDERLAY_E2E_DISPOSABLE:-}" \
-  TSUNDERLAY_E2E_STRICT="${TSUNDERLAY_E2E_STRICT:-}" \
-  ./bin/e2e.test -test.v
+e2e() {
+  sudo env \
+    TSUNDERLAY_E2E_DISPOSABLE="${TSUNDERLAY_E2E_DISPOSABLE:-}" \
+    TSUNDERLAY_E2E_STRICT="${TSUNDERLAY_E2E_STRICT:-}" \
+    TSUNDERLAY_E2E_BINARY="{{config_root}}/bin/tsunderlay" \
+    TSUNDERLAY_E2E_BINARY_NEXT="{{config_root}}/bin/tsunderlay-next" \
+    ./bin/e2e.test -test.v "$@"
+}
+status=0
+e2e -test.skip '^TestInstall$' || status=$?
+e2e -test.run '^TestInstall$' || status=$?
+exit "$status"
 '''
 
 # telemetry/manifest.yaml reads the semconv dependency from this archive.
@@ -55,10 +72,9 @@ mv -f "$f.tmp" "$f"
 [tasks."vm:e2e:build"]
 description = "Compile the end-to-end test binary with the guest-only tests, and the daemon that they run, for darwin/arm64"
 env = { GOOS = "darwin", GOARCH = "arm64", CGO_ENABLED = "0" }
-run = [
-  "go test -c -tags e2e,e2e_guest -o bin/e2e-guest.test ./e2e",
-  "go build -o bin/tsunderlay .",
-]
+# The guest runs the install test too, so it needs the same binaries.
+depends = ["e2e:build"]
+run = "go test -c -tags e2e,e2e_guest -o bin/e2e-guest.test ./e2e"
 
 [tasks."vm:e2e"]
 description = "Run all end-to-end tests in a headless tart guest. Clone and start the guest when necessary"
@@ -88,12 +104,20 @@ if ! tart exec "$vm" true 2>/dev/null; then
   done
 fi
 # The guest agent's PATH does not include /sbin, where ifconfig and route are.
-tart exec "$vm" sudo env \
-  PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-  TSUNDERLAY_E2E_DISPOSABLE=1 \
-  TSUNDERLAY_E2E_STRICT=1 \
-  TSUNDERLAY_E2E_DAEMON="/Volumes/My Shared Files/tsunderlay/bin/tsunderlay" \
-  "/Volumes/My Shared Files/tsunderlay/bin/e2e-guest.test" -test.v
+# TestInstall runs alone, after the other tests, as in the e2e task.
+e2e() {
+  tart exec "$vm" sudo env \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    TSUNDERLAY_E2E_DISPOSABLE=1 \
+    TSUNDERLAY_E2E_STRICT=1 \
+    "TSUNDERLAY_E2E_BINARY=/Volumes/My Shared Files/tsunderlay/bin/tsunderlay" \
+    "TSUNDERLAY_E2E_BINARY_NEXT=/Volumes/My Shared Files/tsunderlay/bin/tsunderlay-next" \
+    "/Volumes/My Shared Files/tsunderlay/bin/e2e-guest.test" -test.v "$@"
+}
+status=0
+e2e -test.skip '^TestInstall$' || status=$?
+e2e -test.run '^TestInstall$' || status=$?
+exit "$status"
 '''
 
 # The registry check sees only the registry, not the keys in the code. This

@@ -1,0 +1,433 @@
+// Package install installs the daemon as a launchd job. The job runs a
+// root-owned copy of the binary, never the Homebrew binary: the Homebrew
+// prefix is writable by the user, so a root job that runs it gives root to
+// any process of the user at the next restart.
+//
+// Install compares each file with the state on disk and changes only the
+// difference, so a repeat run with the same binary and flags changes
+// nothing. The file system and launchctl are dependencies of Installer, so
+// that tests run without root and without launchd.
+package install
+
+import (
+	"bytes"
+	"context"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"path/filepath"
+	"strings"
+)
+
+// The names and paths of the installed daemon. Each command that finds or
+// removes the installation uses these.
+const (
+	// Label is the launchd label of the job.
+	Label = "io.github.nagato-yuzuru.tsunderlay"
+	// Service is the launchctl service target of the job.
+	Service = "system/" + Label
+	// HelperDir holds the binary, the lock, and the change mark. A clean
+	// macOS does not have it, so Install makes it.
+	HelperDir = "/Library/PrivilegedHelperTools"
+	// DaemonDir holds the plist. Each macOS has it.
+	DaemonDir = "/Library/LaunchDaemons"
+	// BinaryPath is the root-owned copy of the binary that the job runs.
+	BinaryPath = HelperDir + "/" + Label
+	// PlistPath is the job definition.
+	PlistPath = DaemonDir + "/" + Label + ".plist"
+	// PendingPath marks a change of the files that launchd possibly did not
+	// apply yet. Install writes it before it changes a file and removes it
+	// after launchctl applied the change. When the mark is present, the next
+	// install reloads the job, also when the files are already correct.
+	PendingPath = BinaryPath + ".pending"
+	// LockPath is the lock file of Install. Two installs at the same time
+	// run one after the other.
+	LockPath = BinaryPath + ".lock"
+	// LogPath receives the standard error of the daemon.
+	LogPath = "/var/log/tsunderlay.log"
+)
+
+const (
+	binaryPerm fs.FileMode = 0o755
+	plistPerm  fs.FileMode = 0o644
+	// helperDirMode is the mode that macOS gives HelperDir.
+	helperDirMode = fs.ModeSticky | 0o755
+	// unsafeBits are the bits that let a user other than root change a
+	// directory.
+	unsafeBits fs.FileMode = 0o022
+)
+
+var (
+	// ErrNotRoot means that the process does not run with effective uid 0.
+	ErrNotRoot = errors.New("install needs root; run it with sudo")
+	// ErrUnsafeDir means that a user other than root can change a directory
+	// on the path to an installed file, or that the path has a symbolic link.
+	ErrUnsafeDir = errors.New("a user other than root can change the directory")
+	// ErrLaunchctl means that launchctl reported a failure.
+	ErrLaunchctl = errors.New("launchctl failed")
+)
+
+// FileStat is the type, the owner, and the mode of a file.
+type FileStat struct {
+	UID  uint32
+	GID  uint32
+	Mode fs.FileMode
+}
+
+// FS is the file system that Install reads and changes.
+type FS interface {
+	// ReadFile returns the content of a file. The error wraps
+	// fs.ErrNotExist when the file does not exist.
+	ReadFile(name string) ([]byte, error)
+	// WriteFile replaces name with data, owned by root:wheel with mode perm.
+	// A reader sees the old or the new content, never a part.
+	WriteFile(name string, data []byte, perm fs.FileMode) error
+	// Remove removes a file. A missing file is not an error.
+	Remove(name string) error
+	// Lstat returns the type, the owner, and the mode of a file. It does
+	// not follow a symbolic link. The error wraps fs.ErrNotExist when the
+	// file does not exist.
+	Lstat(name string) (FileStat, error)
+	// Mkdir makes the directory name, owned by root:wheel with mode perm.
+	// The error wraps fs.ErrExist when name exists.
+	Mkdir(name string, perm fs.FileMode) error
+	// Lock takes an exclusive lock on the file name. It waits while another
+	// process has the lock. Close releases the lock.
+	Lock(name string) (io.Closer, error)
+}
+
+// Launchd controls the jobs of the system domain.
+type Launchd interface {
+	// Loaded tells whether launchd has the job of service.
+	Loaded(ctx context.Context, service string) (bool, error)
+	// Enable removes a disabled override of service.
+	Enable(ctx context.Context, service string) error
+	// Bootstrap loads the job of a plist into the system domain.
+	Bootstrap(ctx context.Context, plist string) error
+	// Bootout removes the job of service and returns after launchd no
+	// longer has it.
+	Bootout(ctx context.Context, service string) error
+	// Kickstart stops the job of service and starts it again.
+	Kickstart(ctx context.Context, service string) error
+}
+
+// Installer installs the daemon. All fields are necessary.
+type Installer struct {
+	FS      FS
+	Launchd Launchd
+	// EUID is the effective uid of the process.
+	EUID int
+}
+
+// Install copies the binary at source to BinaryPath, writes the plist at
+// PlistPath, and makes launchd run the job. Each argument in controlURLs
+// becomes one --control-url argument of the job. Install writes one line to
+// w for each change, or "no change".
+//
+// Install makes HelperDir when it is missing. It holds the lock at LockPath
+// from the first read of the installation to the end.
+//
+// Errors: ErrNotRoot without root; ErrUnsafeDir when a user other than root
+// can change a directory on the path to an installed file, before Install
+// reads or writes a file of the installation; ErrLaunchctl when launchctl
+// fails.
+func (in Installer) Install(ctx context.Context, w io.Writer, source string, controlURLs []string) (err error) {
+	if in.EUID != 0 {
+		return ErrNotRoot
+	}
+	if err := in.prepareDirs(); err != nil {
+		return err
+	}
+	lock, err := in.FS.Lock(LockPath)
+	if err != nil {
+		return fmt.Errorf("locking %s: %w", LockPath, err)
+	}
+	defer func() { err = errors.Join(err, lock.Close()) }()
+
+	st, err := in.state(ctx, source, controlURLs)
+	if err != nil {
+		return err
+	}
+	r := reporter{w: w}
+	if err := in.writeFiles(&r, source, st); err != nil {
+		return err
+	}
+	if err := in.apply(ctx, &r, st.action); err != nil {
+		return err
+	}
+	if st.dirty() {
+		if err := in.FS.Remove(PendingPath); err != nil {
+			return fmt.Errorf("removing the change mark: %w", err)
+		}
+	}
+	if !r.changed {
+		r.printf("no change")
+	}
+	return r.err
+}
+
+// action is the launchctl change that makes launchd run the files on disk.
+type action int
+
+const (
+	actNone action = iota
+	// actBootstrap loads a job that launchd does not have.
+	actBootstrap
+	// actReload replaces the job definition. launchd reads the plist only
+	// when it loads the job, so a new plist needs a bootout and a bootstrap.
+	actReload
+	// actKickstart restarts the job, so that it runs the new binary.
+	actKickstart
+)
+
+// decide returns the action for the state of launchd and of the files. A
+// pending mark means that an earlier install changed a file and possibly
+// did not apply it, so the action is a reload.
+func decide(loaded, binChanged, plistChanged, pending bool) action {
+	switch {
+	case !loaded:
+		return actBootstrap
+	case plistChanged || pending:
+		return actReload
+	case binChanged:
+		return actKickstart
+	default:
+		return actNone
+	}
+}
+
+// state is the installation on disk and in launchd, compared with the
+// wanted one.
+type state struct {
+	bin, plist   []byte
+	binChanged   bool
+	plistChanged bool
+	pending      bool
+	action       action
+}
+
+// dirty tells whether a file changes now or changed in an earlier install
+// that did not complete.
+func (st state) dirty() bool { return st.binChanged || st.plistChanged || st.pending }
+
+func (in Installer) state(ctx context.Context, source string, controlURLs []string) (state, error) {
+	st := state{plist: Plist(controlURLs)}
+	var err error
+	if st.bin, err = in.FS.ReadFile(source); err != nil {
+		return st, fmt.Errorf("reading the binary: %w", err)
+	}
+	if st.binChanged, err = in.differs(BinaryPath, st.bin, binaryPerm); err != nil {
+		return st, err
+	}
+	if st.plistChanged, err = in.differs(PlistPath, st.plist, plistPerm); err != nil {
+		return st, err
+	}
+	if st.pending, err = in.exists(PendingPath); err != nil {
+		return st, err
+	}
+	loaded, err := in.Launchd.Loaded(ctx, Service)
+	if err != nil {
+		return st, err
+	}
+	st.action = decide(loaded, st.binChanged, st.plistChanged, st.pending)
+	return st, nil
+}
+
+// writeFiles writes the files that differ. Before the first write, it
+// writes the mark of a pending change.
+func (in Installer) writeFiles(r *reporter, source string, st state) error {
+	if (st.binChanged || st.plistChanged) && !st.pending {
+		if err := in.FS.WriteFile(PendingPath, nil, plistPerm); err != nil {
+			return fmt.Errorf("marking the change: %w", err)
+		}
+	}
+	if st.binChanged {
+		if err := in.FS.WriteFile(BinaryPath, st.bin, binaryPerm); err != nil {
+			return fmt.Errorf("copying the binary: %w", err)
+		}
+		r.printf("copied %s to %s", source, BinaryPath)
+	}
+	if st.plistChanged {
+		if err := in.FS.WriteFile(PlistPath, st.plist, plistPerm); err != nil {
+			return fmt.Errorf("writing the plist: %w", err)
+		}
+		r.printf("wrote %s", PlistPath)
+	}
+	return nil
+}
+
+func (in Installer) apply(ctx context.Context, r *reporter, a action) error {
+	switch a {
+	case actNone:
+		return nil
+	case actBootstrap:
+		if err := in.bootstrap(ctx); err != nil {
+			return err
+		}
+		r.printf("bootstrapped %s", Service)
+	case actReload:
+		if err := in.Launchd.Bootout(ctx, Service); err != nil {
+			return err
+		}
+		if err := in.bootstrap(ctx); err != nil {
+			return err
+		}
+		r.printf("reloaded %s", Service)
+	case actKickstart:
+		if err := in.Launchd.Kickstart(ctx, Service); err != nil {
+			return err
+		}
+		r.printf("restarted %s", Service)
+	default:
+		panic(fmt.Sprintf("install: unknown action %d", a))
+	}
+	return nil
+}
+
+// bootstrap enables the service before the bootstrap. launchd refuses to
+// bootstrap a service that has a disabled override, for example from an
+// earlier "launchctl disable".
+func (in Installer) bootstrap(ctx context.Context) error {
+	if err := in.Launchd.Enable(ctx, Service); err != nil {
+		return err
+	}
+	return in.Launchd.Bootstrap(ctx, PlistPath)
+}
+
+// prepareDirs checks the directories of the installed files, and makes
+// HelperDir when it is missing. Only root can add an entry to a safe
+// /Library, so no other process can make HelperDir first.
+func (in Installer) prepareDirs() error {
+	if err := in.checkDirs(DaemonDir); err != nil {
+		return err
+	}
+	err := in.checkDirs(HelperDir)
+	if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	// checkDirs goes from / down and stops at the first missing directory,
+	// so HelperDir is the missing one when its parent exists.
+	if err := in.FS.Mkdir(HelperDir, helperDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("making %s: %w", HelperDir, err)
+	}
+	return in.checkDirs(HelperDir)
+}
+
+// checkDirs returns ErrUnsafeDir when a directory from / to dir is not a
+// directory owned by root, or is writable by group or other. Lstat does not
+// follow a symbolic link, so a link on the path also fails: launchd uses
+// the path as it is, and the owner of the parent of a link can point the
+// link to another directory later.
+//
+// The check reads only the mode bits, not an ACL. Only root can add an ACL
+// to a root-owned directory, a stock macOS has none on these directories,
+// and the check guards against a writer that is not root.
+func (in Installer) checkDirs(dir string) error {
+	var chain []string
+	for d := dir; ; d = filepath.Dir(d) {
+		chain = append(chain, d)
+		if d == filepath.Dir(d) {
+			break
+		}
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		d := chain[i]
+		st, err := in.FS.Lstat(d)
+		if err != nil {
+			return fmt.Errorf("checking %s: %w", d, err)
+		}
+		if !st.Mode.IsDir() || st.UID != 0 || st.Mode.Perm()&unsafeBits != 0 {
+			return fmt.Errorf("%w: %s (owner uid %d, mode %v); the installed daemon runs as root, so install refuses it",
+				ErrUnsafeDir, d, st.UID, st.Mode)
+		}
+	}
+	return nil
+}
+
+// differs tells whether the file name is not a regular file of root:wheel
+// with mode perm and the content want. launchd skips a plist that others
+// can write, and a user who can change the binary gets root.
+func (in Installer) differs(name string, want []byte, perm fs.FileMode) (bool, error) {
+	st, err := in.FS.Lstat(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checking %s: %w", name, err)
+	}
+	if st.Mode != perm || st.UID != 0 || st.GID != 0 {
+		return true, nil
+	}
+	got, err := in.FS.ReadFile(name)
+	if err != nil {
+		return false, fmt.Errorf("reading %s: %w", name, err)
+	}
+	return !bytes.Equal(got, want), nil
+}
+
+func (in Installer) exists(name string) (bool, error) {
+	_, err := in.FS.Lstat(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checking %s: %w", name, err)
+	}
+	return true, nil
+}
+
+// reporter writes one line for each change. It keeps the first write
+// error, so that a closed output does not stop the install halfway.
+type reporter struct {
+	w       io.Writer
+	changed bool
+	err     error
+}
+
+func (r *reporter) printf(format string, args ...any) {
+	r.changed = true
+	if _, err := fmt.Fprintf(r.w, format+"\n", args...); err != nil && r.err == nil {
+		r.err = fmt.Errorf("writing the report: %w", err)
+	}
+}
+
+// Plist returns the job definition. The output depends only on
+// controlURLs, so that Install can compare it with the file byte for byte.
+func Plist(controlURLs []string) []byte {
+	args := []string{BinaryPath, "run"}
+	for _, u := range controlURLs {
+		args = append(args, "--control-url", u)
+	}
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>` + escape(Label) + `</string>
+	<key>ProgramArguments</key>
+	<array>
+`)
+	for _, a := range args {
+		b.WriteString("\t\t<string>" + escape(a) + "</string>\n")
+	}
+	b.WriteString(`	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>` + escape(LogPath) + `</string>
+</dict>
+</plist>
+`)
+	return []byte(b.String())
+}
+
+func escape(s string) string {
+	var b strings.Builder
+	_ = xml.EscapeText(&b, []byte(s)) //nolint:errcheck // a strings.Builder never returns a write error
+	return b.String()
+}

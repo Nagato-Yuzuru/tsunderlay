@@ -17,6 +17,12 @@ const (
 	EnvDisposable = "TSUNDERLAY_E2E_DISPOSABLE"
 	// EnvStrict turns every unmet requirement into a failure.
 	EnvStrict = "TSUNDERLAY_E2E_STRICT"
+	// EnvBinary is the path of the tsunderlay binary that `mise run
+	// e2e:build` builds.
+	EnvBinary = "TSUNDERLAY_E2E_BINARY"
+	// EnvBinaryNext is the path of a second tsunderlay binary. It has other
+	// bytes than EnvBinary and the same behavior, so it acts as an upgrade.
+	EnvBinaryNext = "TSUNDERLAY_E2E_BINARY_NEXT"
 )
 
 // RequireDisposableHost skips the test unless EnvDisposable is "1".
@@ -44,15 +50,17 @@ func RequireCommand(t testing.TB, name string) {
 	}
 }
 
-// RequireEnv returns the value of the environment variable name. It skips
-// the test when the value is empty.
-func RequireEnv(t testing.TB, name string) string {
+// RequireExecutable returns the path in the environment variable env. It
+// skips the test unless the path is an executable file.
+func RequireExecutable(t testing.TB, env string) string {
 	t.Helper()
-	v := os.Getenv(name)
-	if v == "" {
-		unmet(t, name+" is not set")
+	path := os.Getenv(env)
+	if path == "" {
+		unmet(t, env+" is not set; run through `mise run e2e`")
+		return ""
 	}
-	return v
+	RequireCommand(t, path)
+	return path
 }
 
 func unmet(t testing.TB, reason string) {
