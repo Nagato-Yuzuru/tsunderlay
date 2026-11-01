@@ -91,3 +91,21 @@ tart exec "$vm" sudo env \
   TSUNDERLAY_E2E_STRICT=1 \
   "/Volumes/My Shared Files/tsunderlay/bin/e2e-guest.test" -test.v
 '''
+
+# The registry check sees only the registry, not the keys in the code. This
+# task makes the daemon emit each event kind and checks each attribute name
+# against the registry. A name that is not in it is a violation, and weaver
+# then exits non-zero. Without --v2, weaver searches the whole resolved
+# registry: the tsunderlay attributes and the semconv attributes that it
+# references. With --v2, a text sample has no signal to match, so each name
+# is missing unless --search-all-attributes also accepts each semconv name.
+[tasks."telemetry:live-check"]
+description = "Check the log attribute names of the daemon against the telemetry registry"
+depends = ["telemetry:semconv"]
+run = '''
+set -eu
+f=$(mktemp)
+trap 'rm -f "$f"' EXIT
+TSUNDERLAY_LIVECHECK_OUT="$f" go test -count=1 -v -run '^TestLogAttributes$' .
+weaver registry live-check -r telemetry --input-source "$f" --input-format text
+'''

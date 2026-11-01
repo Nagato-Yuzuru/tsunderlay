@@ -36,6 +36,7 @@ linters:
       errorf: false # deliberate %v keeps foreign causes out of the %w contract chain
     sloglint:
       static-msg: true # variables go in attrs, not the message
+      no-raw-keys: true # keys come from the generated constants of attrs.go
     nolintlint:
       require-explanation: true
       require-specific: true
