@@ -35,6 +35,8 @@ type fakeFS struct {
 	events *[]string
 	// failWrite makes WriteFile of this path fail.
 	failWrite string
+	// failRead makes ReadFile of this path fail.
+	failRead string
 	// lock is the lock of LockPath: a full channel is a held lock.
 	lock chan struct{}
 }
@@ -45,6 +47,9 @@ func (f *fakeFS) record(format string, args ...any) {
 
 func (f *fakeFS) ReadFile(name string) ([]byte, error) {
 	f.record("read %s", name)
+	if name == f.failRead {
+		return nil, fmt.Errorf("open %s: %w", name, fs.ErrPermission)
+	}
 	b, ok := f.files[name]
 	if !ok {
 		return nil, fmt.Errorf("open %s: %w", name, fs.ErrNotExist)
@@ -623,5 +628,90 @@ func TestPlistIsStableAndEscapesArguments(t *testing.T) {
 	}
 	if want := "<string>https://hs.example.com/?a=1&amp;b=&lt;2&gt;</string>"; !bytes.Contains(a, []byte(want)) {
 		t.Errorf("plist does not contain %q:\n%s", want, a)
+	}
+}
+
+func TestInstalled(t *testing.T) {
+	want := []byte("binary v1")
+	tests := []struct {
+		name    string
+		change  func(f *fakeFS)
+		want    Match
+		wantErr error
+	}{
+		{name: "same content", want: Same},
+		{
+			name:   "other content",
+			change: func(f *fakeFS) { f.files[BinaryPath] = file{data: []byte("binary v0")} },
+			want:   Different,
+		},
+		{
+			// The content check does not replace the owner and mode check
+			// of Install.
+			name:   "same content with a loose mode",
+			change: func(f *fakeFS) { f.files[BinaryPath] = file{data: want, st: FileStat{UID: 501, Mode: 0o777}} },
+			want:   Same,
+		},
+		{
+			name:   "no binary",
+			change: func(f *fakeFS) { delete(f.files, BinaryPath) },
+			want:   NotInstalled,
+		},
+		{
+			name:   "no helper directory",
+			change: func(f *fakeFS) { delete(f.dirs, HelperDir); delete(f.files, BinaryPath) },
+			want:   NotInstalled,
+		},
+		{
+			name:    "a directory that a user can write",
+			change:  func(f *fakeFS) { f.dirs[HelperDir] = FileStat{Mode: fs.ModeDir | 0o777} },
+			wantErr: ErrUnsafeDir,
+		},
+		{
+			name:    "a parent owned by a user",
+			change:  func(f *fakeFS) { f.dirs["/Library"] = FileStat{UID: 501, Mode: fs.ModeDir | 0o755} },
+			wantErr: ErrUnsafeDir,
+		},
+		{
+			name:    "unreadable binary",
+			change:  func(f *fakeFS) { f.failRead = BinaryPath },
+			wantErr: fs.ErrPermission,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHost()
+			h.mustInstall(t)
+			if tt.change != nil {
+				tt.change(h.fs)
+			}
+			h.events = nil
+
+			got, err := Installer{FS: h.fs}.Installed(want)
+
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("match = %v, want %v", got, tt.want)
+			}
+			if c := h.changes(); len(c) != 0 {
+				t.Errorf("changes = %q, want none", c)
+			}
+		})
+	}
+}
+
+func TestInstalledChecksDirectoriesBeforeReading(t *testing.T) {
+	h := newHost()
+	h.mustInstall(t)
+	h.fs.dirs[HelperDir] = FileStat{Mode: fs.ModeDir | 0o777}
+	h.events = nil
+
+	if _, err := (Installer{FS: h.fs}).Installed([]byte("binary v1")); !errors.Is(err, ErrUnsafeDir) {
+		t.Fatalf("err = %v, want ErrUnsafeDir", err)
+	}
+	if len(h.events) != 0 {
+		t.Errorf("events = %q, want none: the binary of an unsafe directory says nothing", h.events)
 	}
 }

@@ -59,8 +59,12 @@ func newCheckCmd() *cobra.Command {
 		Short: "Print the network facts and the planned route changes",
 		Long: `Print the network facts and the planned route changes.
 
-Exit status 0: no change is necessary. 1: a change is necessary, or the VPN
-state is ambiguous. 2: an error.`,
+check also compares the installed daemon (see install) with this binary. It
+prints "not installed" when there is none, which is not a failure.
+
+Exit status 0: no change is necessary. 1: a change is necessary, the VPN
+state is ambiguous, or the installed daemon differs from this binary or
+cannot be checked. 2: an error.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			hosts, err := controlHosts(urls)

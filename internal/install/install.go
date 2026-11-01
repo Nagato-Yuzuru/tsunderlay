@@ -168,6 +168,50 @@ func (in Installer) Install(ctx context.Context, w io.Writer, source string, con
 	return r.err
 }
 
+// Match tells how the installed binary compares with a wanted one.
+type Match int
+
+const (
+	// MatchUnspecified is the zero value. Installed never returns it.
+	MatchUnspecified Match = iota
+	// NotInstalled means that the installed binary does not exist.
+	NotInstalled
+	// Same means that the installed binary has the wanted content.
+	Same
+	// Different means that the installed binary has other content.
+	Different
+)
+
+// Installed compares the installed binary at BinaryPath with want. It
+// reads and does not change anything, so any user can run it. Only the
+// content counts: owner and mode are the business of Install.
+//
+// Errors: ErrUnsafeDir when a user other than root can change a directory
+// on the path to the binary, because then the content says nothing about
+// what the job runs; any other error when the binary exists and cannot be
+// read. A missing binary or a missing HelperDir is NotInstalled, not an
+// error.
+func (in Installer) Installed(want []byte) (Match, error) {
+	err := in.checkDirs(HelperDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return NotInstalled, nil
+	}
+	if err != nil {
+		return MatchUnspecified, err
+	}
+	got, err := in.FS.ReadFile(BinaryPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return NotInstalled, nil
+	}
+	if err != nil {
+		return MatchUnspecified, fmt.Errorf("reading %s: %w", BinaryPath, err)
+	}
+	if bytes.Equal(got, want) {
+		return Same, nil
+	}
+	return Different, nil
+}
+
 // action is the launchctl change that makes launchd run the files on disk.
 type action int
 
