@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"net"
 	"net/netip"
 	"testing"
 	"time"
@@ -14,10 +13,14 @@ import (
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
 )
 
-// TestReconnectChangesInterface proves two facts of the kernel that the loop
-// depends on. When an interface goes away, its routes go with it. When it
-// comes back, it has a new index, and a route on it reads back again.
-func TestReconnectChangesInterface(t *testing.T) {
+// TestReconnectRemovesRoutes proves the fact of the kernel that the loop
+// depends on: when an interface goes away, its routes go with it. A route on
+// the next interface reads back again.
+//
+// The next interface can get the same name and index (observed on a CI
+// runner) or other ones (observed on a Mac with more tunnels). So the daemon
+// keeps no interface index between runs, and this test checks no index.
+func TestReconnectRemovesRoutes(t *testing.T) {
 	requireE2E(t)
 	dst := netip.MustParsePrefix("198.18.40.10/32")
 	addArgs := func(iface string) []string {
@@ -25,10 +28,6 @@ func TestReconnectChangesInterface(t *testing.T) {
 	}
 
 	old := newUTUN(t, "198.18.40.1", "198.18.40.2")
-	oldIfc, err := net.InterfaceByName(old.Name)
-	if err != nil {
-		t.Fatalf("look up %s: %v", old.Name, err)
-	}
 	oldRoute := underlay.Route{Dst: dst, Iface: old.Name, Owned: true}
 	routeCmd(t, addArgs(old.Name)...)
 	if _, ok := lookup(t, oldRoute); !ok {
@@ -41,13 +40,6 @@ func TestReconnectChangesInterface(t *testing.T) {
 	}
 
 	fresh := newUTUN(t, "198.18.40.1", "198.18.40.2")
-	freshIfc, err := net.InterfaceByName(fresh.Name)
-	if err != nil {
-		t.Fatalf("look up %s: %v", fresh.Name, err)
-	}
-	if freshIfc.Index == oldIfc.Index {
-		t.Fatalf("%s has the index %d of the closed %s", fresh.Name, freshIfc.Index, old.Name)
-	}
 	routeCmd(t, addArgs(fresh.Name)...)
 	want := underlay.Route{Dst: dst, Iface: fresh.Name, Owned: true}
 	got, ok := lookup(t, want)
