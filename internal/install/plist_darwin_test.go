@@ -36,7 +36,7 @@ func TestPlistParsesAsJobDefinition(t *testing.T) {
 	}
 	want := job{
 		Label:             "io.github.nagato-yuzuru.tsunderlay",
-		ProgramArguments:  []string{"/Library/PrivilegedHelperTools/io.github.nagato-yuzuru.tsunderlay", "run", "--control-url", "https://hs.example.com/?a=1&b=2"},
+		ProgramArguments:  []string{"/Library/PrivilegedHelperTools/io.github.nagato-yuzuru.tsunderlay", "run", "--log-file", "/var/log/tsunderlay.log", "--control-url", "https://hs.example.com/?a=1&b=2"},
 		RunAtLoad:         true,
 		KeepAlive:         true,
 		StandardErrorPath: "/var/log/tsunderlay.log",

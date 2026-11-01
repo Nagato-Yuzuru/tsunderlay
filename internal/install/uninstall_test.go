@@ -97,6 +97,7 @@ func TestUninstallRemovesAFullInstallation(t *testing.T) {
 
 	want := lines(
 		"booted out "+Service,
+		"removed "+RotationPath,
 		"removed "+PlistPath,
 		"removed "+BinaryPath,
 		"deleted the owned route 10.8.0.1/32 on utun4",
@@ -112,6 +113,7 @@ func TestUninstallRemovesAFullInstallation(t *testing.T) {
 		"lock " + LockPath,
 		"print " + Service,
 		"bootout " + Service,
+		"remove " + RotationPath,
 		"remove " + PlistPath,
 		"remove " + BinaryPath,
 		"route delete 10.8.0.1/32",
@@ -253,9 +255,10 @@ func TestFailedUninstallIsCompletedByTheNextRun(t *testing.T) {
 			name:      "bootout fails",
 			fail:      func(h *host, _ *fakeRoutes) { h.ld.fail = "bootout" },
 			wantErr:   ErrLaunchctl,
-			wantFiles: []string{PlistPath, BinaryPath, LockPath},
+			wantFiles: []string{RotationPath, PlistPath, BinaryPath, LockPath},
 			wantNext: lines(
 				"booted out "+Service,
+				"removed "+RotationPath,
 				"removed "+PlistPath,
 				"removed "+BinaryPath,
 				"deleted the owned route 10.8.0.1/32 on utun4",
@@ -313,6 +316,47 @@ func TestUninstallUnsafeDaemonDirRefusesBeforeAnyAccess(t *testing.T) {
 	}
 }
 
+// An unsafe NewsyslogDir does not keep the job running: Uninstall stops the
+// job, removes the files in the safe directories, deletes the owned routes,
+// and then refuses. It does not touch the rule.
+func TestUninstallUnsafeNewsyslogDirStopsTheJobAndRefuses(t *testing.T) {
+	h := newHost()
+	h.mustInstall(t)
+	h.fs.dirs[NewsyslogDir] = FileStat{Mode: fs.ModeDir | 0o777}
+	rt := &fakeRoutes{table: []underlay.Route{ownedR2, operator}}
+
+	out, err := h.uninstall(t, rt)
+
+	if !errors.Is(err, ErrUnsafeDir) {
+		t.Fatalf("err = %v, want ErrUnsafeDir", err)
+	}
+	if !strings.Contains(err.Error(), ": "+NewsyslogDir+" (") {
+		t.Errorf("error %q does not name %s", err, NewsyslogDir)
+	}
+	want := lines(
+		"booted out "+Service,
+		"removed "+PlistPath,
+		"removed "+BinaryPath,
+		"deleted the owned route 10.8.0.1/32 on utun4",
+		kept,
+	)
+	if out != want {
+		t.Errorf("output:\n%s\nwant:\n%s", out, want)
+	}
+	if h.ld.loaded {
+		t.Error("launchd still has the job")
+	}
+	if diff := cmp.Diff([]string{RotationPath}, h.installed()); diff != "" {
+		t.Errorf("files left (-want +got):\n%s", diff)
+	}
+	if len(h.fs.lock) != 0 {
+		t.Error("the lock is held after Uninstall returned")
+	}
+	if diff := cmp.Diff([]underlay.Route{operator}, rt.table, equateRoutes); diff != "" {
+		t.Errorf("routes left (-want +got):\n%s", diff)
+	}
+}
+
 // A user who can change HelperDir can replace the binary of the root job,
 // so Uninstall stops the job and deletes its routes. It does not touch a
 // file in HelperDir, and then refuses.
@@ -329,6 +373,7 @@ func TestUninstallUnsafeHelperDirStopsTheJobAndRefuses(t *testing.T) {
 	}
 	want := lines(
 		"booted out "+Service,
+		"removed "+RotationPath,
 		"removed "+PlistPath,
 		"deleted the owned route 10.8.0.1/32 on utun4",
 		kept,
@@ -362,6 +407,7 @@ func TestUninstallRemovesLeftTemporaryFiles(t *testing.T) {
 	}{
 		{name: "temporary plist", targets: []string{PlistPath}},
 		{name: "temporary binary", targets: []string{BinaryPath}},
+		{name: "temporary rotation rule", targets: []string{RotationPath}},
 		{name: "temporary change mark and plist", targets: []string{PlistPath, PendingPath}},
 		{name: "temporary env file of the system app", targets: []string{SystemAppEnvPath}},
 	}

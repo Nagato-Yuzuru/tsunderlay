@@ -24,7 +24,10 @@ import (
 var ErrNotRoot = errors.New("run needs root")
 
 func newRunCmd() *cobra.Command {
-	var urls []string
+	var (
+		urls    []string
+		logPath string
+	)
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Keep the routes in place until a signal stops the daemon (launchd runs this as root)",
@@ -37,11 +40,21 @@ func newRunCmd() *cobra.Command {
 			if os.Geteuid() != 0 {
 				return ErrNotRoot
 			}
-			log := slog.New(slog.NewJSONHandler(cmd.ErrOrStderr(), nil))
+			w := cmd.ErrOrStderr()
+			if logPath != "" {
+				// The log goes on the standard error of the process, so that
+				// a crash report of the runtime goes to the log too.
+				if w, err = openLog(os.Stderr, logPath); err != nil {
+					return err
+				}
+			}
+			log := slog.New(slog.NewJSONHandler(w, nil))
 			return runDaemon(cmd.Context(), log, urls, hosts)
 		},
 	}
 	addControlURLFlag(cmd, &urls)
+	cmd.Flags().StringVar(&logPath, "log-file", "",
+		"write the log and the standard error to this file, and open it again after newsyslog rotates it (install sets it); without it, the log goes to the standard error")
 	return cmd
 }
 

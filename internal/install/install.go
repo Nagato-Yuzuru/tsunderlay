@@ -20,6 +20,7 @@ import (
 	"io"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -47,9 +48,36 @@ const (
 	// LockPath is the lock file of Install and Uninstall. Two of them at the
 	// same time run one after the other.
 	LockPath = BinaryPath + ".lock"
-	// LogPath receives the standard error of the daemon.
+	// LogPath is the log of the daemon. The job passes it to --log-file
+	// of run, and launchd sends the standard error of the job to it too,
+	// for the output before the daemon opens it.
 	LogPath = "/var/log/tsunderlay.log"
+	// NewsyslogDir holds the rotation rules of newsyslog. It is the real
+	// path of /etc/newsyslog.d: /etc is a symbolic link, and checkDirs
+	// refuses a link. Each macOS has it.
+	NewsyslogDir = "/private/etc/newsyslog.d"
+	// RotationPath is the newsyslog rule that rotates LogPath.
+	RotationPath = NewsyslogDir + "/" + Label + ".conf"
 )
+
+// rotationRule makes newsyslog rotate LogPath. newsyslog runs each hour at
+// minute 30 (com.apple.newsyslog) and rotates the file when it is 1024 KB
+// or more. One event is a JSON line of some hundred bytes, and the daemon
+// writes at most about one each second, also with a VPN that flaps. Thus
+// the file grows by at most about 2 MB between two runs, and a quiet
+// daemon fills it in months. 5 archives keep at least some hours of a
+// flapping VPN in at most about 15 MB.
+//
+// The archives are not compressed: newsyslog compresses an archive at the
+// rotation and removes the uncompressed file at once. The daemon moves to
+// the new file only at its next log line, so until then a crash report of
+// the runtime goes to the archive, and it must stay readable there.
+//
+// B: newsyslog adds no text line, so each line stays JSON. N: newsyslog
+// sends no signal. The daemon opens LogPath itself (--log-file) and opens
+// it again after a rotation.
+const rotationRule = "# Written by tsunderlay install. Removed by tsunderlay uninstall.\n" +
+	LogPath + "\troot:wheel\t644\t5\t1024\t*\tBN\n"
 
 const (
 	binaryPerm fs.FileMode = 0o755
@@ -77,17 +105,78 @@ func tempPath(name string) string {
 	return filepath.Join(filepath.Dir(name), "."+filepath.Base(name)+".tmp")
 }
 
-// writtenFiles returns each file that Install writes, and the temporary
-// file of each write, with the plist first. The environment file of the
-// system app is not in the list: it belongs to the system app, and only its
-// temporary file is a file of tsunderlay.
-func writtenFiles() []string {
-	return []string{
-		PlistPath, tempPath(PlistPath),
-		BinaryPath, tempPath(BinaryPath),
-		PendingPath, tempPath(PendingPath),
-		tempPath(SystemAppEnvPath),
+// effect is the launchd change that a new version of a managed file needs.
+// A larger effect includes each smaller one.
+type effect int
+
+const (
+	// effectNone: launchd does not read the file.
+	effectNone effect = iota
+	// effectKickstart: a restart of the job runs the new file.
+	effectKickstart
+	// effectReload: launchd reads the plist only when it loads the job, so
+	// a new plist needs a bootout and a bootstrap.
+	effectReload
+)
+
+// job is the input from which Install makes the content of the managed
+// files.
+type job struct {
+	// bin is the content of the binary that Install copies.
+	bin         []byte
+	controlURLs []string
+}
+
+// managedFile is a file that Install writes when it differs, and that
+// Uninstall removes.
+type managedFile struct {
+	path    string
+	perm    fs.FileMode
+	content func(job) []byte
+	effect  effect
+	// copied makes the report line "copied <source> to <path>" in place of
+	// "wrote <path>".
+	copied bool
+}
+
+// managedFiles returns the files of the installation, in the order of the
+// writes. The binary comes before the plist, so that a plist on disk never
+// names a binary that Install did not copy yet. Uninstall removes them in
+// the reverse order.
+func managedFiles() []managedFile {
+	return []managedFile{
+		{path: BinaryPath, perm: binaryPerm, content: func(j job) []byte { return j.bin }, effect: effectKickstart, copied: true},
+		{path: PlistPath, perm: plistPerm, content: func(j job) []byte { return Plist(j.controlURLs) }, effect: effectReload},
+		// newsyslog reads the rules at each run, so a new rule needs no
+		// launchd change.
+		{path: RotationPath, perm: plistPerm, content: func(job) []byte { return []byte(rotationRule) }, effect: effectNone},
 	}
+}
+
+// fixedDirs returns the directories of the managed files, each once,
+// without HelperDir. Each macOS has them. Install refuses a directory that
+// a user other than root can change.
+func fixedDirs() []string {
+	var dirs []string
+	for _, f := range managedFiles() {
+		if d := filepath.Dir(f.path); d != HelperDir && !slices.Contains(dirs, d) {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
+}
+
+// writtenFiles returns each file that Install writes, and the temporary
+// file of each write, in the order of the removal: the managed files in the
+// reverse order of the writes, then the change mark. The environment file
+// of the system app is not in the list: it belongs to the system app, and
+// only its temporary file is a file of tsunderlay.
+func writtenFiles() []string {
+	var names []string
+	for _, f := range slices.Backward(managedFiles()) {
+		names = append(names, f.path, tempPath(f.path))
+	}
+	return append(names, PendingPath, tempPath(PendingPath), tempPath(SystemAppEnvPath))
 }
 
 // FileStat is the type, the owner, and the mode of a file.
@@ -143,9 +232,10 @@ type Installer struct {
 }
 
 // Install copies the binary at source to BinaryPath, writes the plist at
-// PlistPath, and makes launchd run the job. Each argument in controlURLs
-// becomes one --control-url argument of the job. Install writes one line to
-// w for each change, or "no change".
+// PlistPath and the rotation rule of LogPath at RotationPath, and makes
+// launchd run the job. Each argument in controlURLs becomes one
+// --control-url argument of the job. Install writes one line to w for each
+// change, or "no change".
 //
 // Install also makes sure that the environment file of the system Tailscale
 // app holds TS_BIND_TO_INTERFACE_BY_ROUTE=true. After a change of that
@@ -257,47 +347,67 @@ const (
 	actKickstart
 )
 
-// decide returns the action for the state of launchd and of the files. A
-// pending mark means that an earlier install changed a file and possibly
-// did not apply it, so the action is a reload.
-func decide(loaded, binChanged, plistChanged, pending bool) action {
+// decide returns the action for the state of launchd and of the files.
+// need is the largest effect of the changed files. A pending mark means
+// that an earlier install changed a file and possibly did not apply it, so
+// the action is a reload.
+func decide(loaded bool, need effect, pending bool) action {
 	switch {
 	case !loaded:
 		return actBootstrap
-	case plistChanged || pending:
+	case need == effectReload || pending:
 		return actReload
-	case binChanged:
+	case need == effectKickstart:
 		return actKickstart
 	default:
 		return actNone
 	}
 }
 
+// change is a managed file that differs from the wanted one.
+type change struct {
+	file managedFile
+	data []byte
+}
+
 // state is the installation on disk and in launchd, compared with the
 // wanted one.
 type state struct {
-	bin, plist   []byte
-	binChanged   bool
-	plistChanged bool
-	pending      bool
-	action       action
+	// changes are in the order of managedFiles.
+	changes []change
+	pending bool
+	action  action
 }
 
-// dirty tells whether a file changes now or changed in an earlier install
-// that did not complete.
-func (st state) dirty() bool { return st.binChanged || st.plistChanged || st.pending }
+// need returns the largest launchd effect of the changes.
+func (st state) need() effect {
+	need := effectNone
+	for _, c := range st.changes {
+		need = max(need, c.file.effect)
+	}
+	return need
+}
+
+// dirty tells whether a file that launchd uses changes now, or changed in
+// an earlier install that did not complete.
+func (st state) dirty() bool { return st.need() != effectNone || st.pending }
 
 func (in Installer) state(ctx context.Context, source string, controlURLs []string) (state, error) {
-	st := state{plist: Plist(controlURLs)}
-	var err error
-	if st.bin, err = in.FS.ReadFile(source); err != nil {
+	var st state
+	bin, err := in.FS.ReadFile(source)
+	if err != nil {
 		return st, fmt.Errorf("reading the binary: %w", err)
 	}
-	if st.binChanged, err = in.differs(BinaryPath, st.bin, binaryPerm); err != nil {
-		return st, err
-	}
-	if st.plistChanged, err = in.differs(PlistPath, st.plist, plistPerm); err != nil {
-		return st, err
+	j := job{bin: bin, controlURLs: controlURLs}
+	for _, f := range managedFiles() {
+		data := f.content(j)
+		changed, err := in.differs(f.path, data, f.perm)
+		if err != nil {
+			return st, err
+		}
+		if changed {
+			st.changes = append(st.changes, change{file: f, data: data})
+		}
 	}
 	if st.pending, err = exists(in.FS, PendingPath); err != nil {
 		return st, err
@@ -306,29 +416,27 @@ func (in Installer) state(ctx context.Context, source string, controlURLs []stri
 	if err != nil {
 		return st, err
 	}
-	st.action = decide(loaded, st.binChanged, st.plistChanged, st.pending)
+	st.action = decide(loaded, st.need(), st.pending)
 	return st, nil
 }
 
-// writeFiles writes the files that differ. Before the first write, it
-// writes the mark of a pending change.
+// writeFiles writes the files that differ. Before the first write of a
+// file that launchd uses, it writes the mark of a pending change.
 func (in Installer) writeFiles(r *reporter, source string, st state) error {
-	if (st.binChanged || st.plistChanged) && !st.pending {
+	if st.need() != effectNone && !st.pending {
 		if err := in.FS.WriteFile(PendingPath, nil, plistPerm); err != nil {
 			return fmt.Errorf("marking the change: %w", err)
 		}
 	}
-	if st.binChanged {
-		if err := in.FS.WriteFile(BinaryPath, st.bin, binaryPerm); err != nil {
-			return fmt.Errorf("copying the binary: %w", err)
+	for _, c := range st.changes {
+		if err := in.FS.WriteFile(c.file.path, c.data, c.file.perm); err != nil {
+			return fmt.Errorf("writing %s: %w", c.file.path, err)
 		}
-		r.printf("copied %s to %s", source, BinaryPath)
-	}
-	if st.plistChanged {
-		if err := in.FS.WriteFile(PlistPath, st.plist, plistPerm); err != nil {
-			return fmt.Errorf("writing the plist: %w", err)
+		if c.file.copied {
+			r.printf("copied %s to %s", source, c.file.path)
+		} else {
+			r.printf("wrote %s", c.file.path)
 		}
-		r.printf("wrote %s", PlistPath)
 	}
 	return nil
 }
@@ -371,11 +479,14 @@ func (in Installer) bootstrap(ctx context.Context) error {
 	return in.Launchd.Bootstrap(ctx, PlistPath)
 }
 
-// prepareDirs checks the directories of the installed files, and makes
-// HelperDir when it is missing.
+// prepareDirs checks the directories of the managed files, and makes
+// HelperDir when it is missing. HelperDir comes last, so that a failed
+// check makes no change.
 func (in Installer) prepareDirs() error {
-	if err := checkDirs(in.FS, DaemonDir); err != nil {
-		return err
+	for _, d := range fixedDirs() {
+		if err := checkDirs(in.FS, d); err != nil {
+			return err
+		}
 	}
 	return prepareHelperDir(in.FS)
 }
@@ -482,7 +593,7 @@ func (r *reporter) note(format string, args ...any) {
 // Plist returns the job definition. The output depends only on
 // controlURLs, so that Install can compare it with the file byte for byte.
 func Plist(controlURLs []string) []byte {
-	args := []string{BinaryPath, "run"}
+	args := []string{BinaryPath, "run", "--log-file", LogPath}
 	for _, u := range controlURLs {
 		args = append(args, "--control-url", u)
 	}

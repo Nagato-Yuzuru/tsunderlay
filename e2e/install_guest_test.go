@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +57,7 @@ func TestInstalledDaemonAddsOwnedRoutesWhenVPNComesUp(t *testing.T) {
 		t.Errorf("second install output = %q, want it to end with %q", out, "no change")
 	}
 	if got := daemonPID(t); got != pid {
-		t.Errorf("daemon pid after the second install = %s, want %s: launchd restarted the daemon", got, pid)
+		t.Errorf("daemon pid after the second install = %d, want %d: launchd restarted the daemon", got, pid)
 	}
 	if !hasAll(wantR1(lan, controlNet), wantR2(vpn))(fetch(t)) {
 		t.Errorf("owned R1 or R2 is gone after the second install; owned routes: %+v", ownedRoutes(fetch(t)))
@@ -116,20 +115,4 @@ func followLog(t *testing.T, at int64, w io.Writer, stop <-chan struct{}) {
 		case <-tick.C:
 		}
 	}
-}
-
-// daemonPID returns the pid that launchctl print shows for the job.
-func daemonPID(t *testing.T) string {
-	t.Helper()
-	out, err := exec.CommandContext(t.Context(), "/bin/launchctl", "print", install.Service).CombinedOutput()
-	if err != nil {
-		t.Fatalf("launchctl print %s: %v\n%s", install.Service, err, out)
-	}
-	for line := range strings.Lines(string(out)) {
-		if pid, ok := strings.CutPrefix(strings.TrimSpace(line), "pid = "); ok {
-			return pid
-		}
-	}
-	t.Fatalf("launchctl print %s shows no pid:\n%s", install.Service, out)
-	return ""
 }

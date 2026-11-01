@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -27,8 +29,9 @@ import (
 const startWait = 15 * time.Second
 
 // TestInstall installs the daemon into the system domain of launchd, the
-// same as an operator. It then upgrades the binary and changes the flags,
-// and checks each time that launchd runs the new daemon. At the end, it
+// same as an operator. It checks that newsyslog rotates the log of the
+// daemon. It then upgrades the binary and changes the flags, and checks
+// each time that launchd runs the new daemon. At the end, it
 // uninstalls the daemon and checks that the job, the files, and the owned
 // routes are gone. The cleanup runs uninstall too, so that a failed test
 // also removes the daemon.
@@ -63,6 +66,7 @@ func TestInstall(t *testing.T) {
 	for _, want := range []string{
 		"copied " + bin + " to " + install.BinaryPath,
 		"wrote " + install.PlistPath,
+		"wrote " + install.RotationPath,
 		"bootstrapped " + install.Service,
 	} {
 		if !slices.Contains(strings.Split(strings.TrimSpace(out), "\n"), want) {
@@ -71,6 +75,7 @@ func TestInstall(t *testing.T) {
 	}
 	checkOwner(t, install.BinaryPath, 0o755)
 	checkOwner(t, install.PlistPath, 0o644)
+	checkOwner(t, install.RotationPath, 0o644)
 	if out, err := exec.CommandContext(t.Context(), "/bin/launchctl", "print", install.Service).CombinedOutput(); err != nil {
 		t.Fatalf("launchctl print %s: %v\n%s", install.Service, err, out)
 	}
@@ -80,6 +85,9 @@ func TestInstall(t *testing.T) {
 	if out, want := tsunderlay(t, bin, "install"), skipped+"no change\n"; out != want {
 		t.Errorf("second install output = %q, want %q", out, want)
 	}
+
+	t.Log("log rotation")
+	checkRotation(t)
 
 	t.Log("upgrade: install from a binary with other bytes")
 	at = logSize(t)
@@ -111,6 +119,7 @@ func TestInstall(t *testing.T) {
 	for _, want := range []string{
 		"booted out " + install.Service,
 		"removed " + install.PlistPath,
+		"removed " + install.RotationPath,
 		"removed " + install.BinaryPath,
 	} {
 		if !slices.Contains(changeLines(out), want) {
@@ -161,7 +170,7 @@ func checkUninstalled(t *testing.T) {
 	if loaded, err := (install.Launchctl{}).Loaded(t.Context(), install.Service); loaded || err != nil {
 		t.Errorf("launchd has %s after uninstall (loaded %v, %v)", install.Service, loaded, err)
 	}
-	for _, p := range []string{install.PlistPath, install.BinaryPath, install.PendingPath, install.LockPath} {
+	for _, p := range []string{install.PlistPath, install.RotationPath, install.BinaryPath, install.PendingPath, install.LockPath} {
 		if _, err := os.Lstat(p); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("%s after uninstall: %v, want no file", p, err)
 		}
@@ -231,7 +240,7 @@ func uninstall(t *testing.T, bin string) {
 	if err := (install.Launchctl{}).Bootout(ctx, install.Service); err != nil {
 		t.Errorf("cleanup: %v", err)
 	}
-	for _, p := range []string{install.PlistPath, install.BinaryPath, install.PendingPath, install.LockPath} {
+	for _, p := range []string{install.PlistPath, install.RotationPath, install.BinaryPath, install.PendingPath, install.LockPath} {
 		switch err := os.Remove(p); {
 		case err == nil:
 			t.Logf("cleanup: removed %s", p)
@@ -297,4 +306,118 @@ func firstStart(t *testing.T, at int64) ([]string, bool) {
 		}
 	}
 	return nil, false
+}
+
+// newsyslogPath is the rotation tool of macOS.
+const newsyslogPath = "/usr/sbin/newsyslog"
+
+// checkRotation checks that newsyslog has the rule for install.LogPath.
+// After a forced rotation, it checks that the daemon writes to the new file
+// without a restart: the daemon writes an event when it deletes an owned
+// route that it does not need, so an owned route on a new utun makes it
+// write. After a second rotation, it checks that a crash report of the
+// runtime before the next event stays readable in the rotated file, and
+// that the daemon that launchd starts again writes to the new file.
+func checkRotation(t *testing.T) {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), newsyslogPath, "-nvv").CombinedOutput()
+	if err != nil {
+		t.Fatalf("newsyslog -nvv: %v\n%s", err, out)
+	}
+	// newsyslog shows the count, the flag Z or J (none here), and the size
+	// limit.
+	rule := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(install.LogPath) + ` <5>: size \(Kb\): \d+ \[1024\] --> `)
+	if !rule.Match(out) {
+		t.Fatalf("newsyslog -nvv does not list %s with 5 archives, no compression, and 1024 KB:\n%s", install.LogPath, out)
+	}
+
+	rotateLog(t)
+	u := newUTUN(t, "198.18.31.1", "198.18.31.2")
+	routeCmd(t, "-n", "add", "-proto1", "-host", "198.18.31.10", "-interface", u.Name)
+	deadline := time.Now().Add(startWait)
+	for {
+		msgs := logMessages(t)
+		if slices.Contains(msgs, "routes changed") {
+			if slices.Contains(msgs, "start") {
+				t.Errorf("%s has a start event after the rotation: the rotation kept the old lines, or launchd started the daemon again; events %q",
+					install.LogPath, msgs)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			b, _ := os.ReadFile(install.LogPath) //nolint:errcheck // the content is only a hint for the failure
+			t.Fatalf("no route change event in the new %s after %v; it has:\n%s", install.LogPath, startWait, b)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	rotateLog(t)
+	// SIGQUIT makes the runtime write a crash report to the standard error
+	// and exit. No event comes between the rotation and the report.
+	if err := syscall.Kill(daemonPID(t), syscall.SIGQUIT); err != nil {
+		t.Fatalf("kill -QUIT: %v", err)
+	}
+	waitStart(t, 0, []string{"https://controlplane.tailscale.com"})
+	b, err := os.ReadFile(install.LogPath + ".0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte("SIGQUIT: quit")) {
+		t.Errorf("the crash report is not in %s.0; it has:\n%s", install.LogPath, b)
+	}
+}
+
+// rotateLog makes newsyslog rotate install.LogPath now, and checks that the
+// rotated file is at install.LogPath.0.
+func rotateLog(t *testing.T) {
+	t.Helper()
+	if out, err := exec.CommandContext(t.Context(), newsyslogPath, "-F", install.LogPath).CombinedOutput(); err != nil {
+		t.Fatalf("newsyslog -F %s: %v\n%s", install.LogPath, err, out)
+	}
+	if _, err := os.Lstat(install.LogPath + ".0"); err != nil {
+		t.Fatalf("no rotated file: %v", err)
+	}
+}
+
+// daemonPID returns the pid of the job from launchctl print.
+func daemonPID(t *testing.T) int {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "/bin/launchctl", "print", install.Service).Output()
+	if err != nil {
+		t.Fatalf("launchctl print %s: %v", install.Service, err)
+	}
+	m := regexp.MustCompile(`(?m)^\s*pid = (\d+)$`).FindSubmatch(out)
+	if m == nil {
+		t.Fatalf("launchctl print %s has no pid:\n%s", install.Service, out)
+	}
+	pid, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pid
+}
+
+// logMessages returns the message of each complete line in
+// install.LogPath. Each line must be a JSON event: the rule tells newsyslog
+// to add no text line.
+func logMessages(t *testing.T) []string {
+	t.Helper()
+	b, err := os.ReadFile(install.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msgs []string
+	for line := range strings.Lines(string(b)) {
+		if !strings.HasSuffix(line, "\n") {
+			break // the daemon writes this line now
+		}
+		var e struct {
+			Msg string `json:"msg"`
+		}
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("line %q in %s is not a JSON event: %v", line, install.LogPath, err)
+		}
+		msgs = append(msgs, e.Msg)
+	}
+	return msgs
 }

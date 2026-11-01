@@ -23,6 +23,8 @@ install copies this binary to
   ` + install.BinaryPath + `
 writes the job definition to
   ` + install.PlistPath + `
+writes the newsyslog rule that rotates ` + install.LogPath + ` to
+  ` + install.RotationPath + `
 and loads the job. Run it again after an upgrade: it changes only what
 differs, and restarts the daemon only after a change. The job gets one
 --control-url for each --control-url of install, and none when install
