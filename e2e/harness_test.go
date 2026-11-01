@@ -1,8 +1,9 @@
 //go:build e2e && darwin
 
 // Package e2e holds the end-to-end tests. They add routes and network
-// interfaces, so they run only on a disposable host as root. Build them with
-// `mise run e2e:build`.
+// interfaces, so they run only as root on a host that the root-owned file
+// /var/db/tsunderlay-e2e-disposable marks as disposable: a CI runner or the
+// tart guest of `mise run vm:e2e`. Build them with `mise run e2e:build`.
 //
 // The tests change only routes in 198.18.0.0/15 on interfaces that they
 // create. 198.18.0.0/15 is reserved for benchmark tests (RFC 2544), so it
