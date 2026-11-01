@@ -31,10 +31,8 @@ const (
 	utunHeaderLen = 4
 )
 
-var errShortPacket = errors.New("packet shorter than the utun header")
-
 // UTUN is a utun interface that the test owns. Packets that the kernel sends
-// out through the interface arrive at ReadPacket, so a test can prove that a
+// out through the interface arrive at WaitPacket, so a test can prove that a
 // packet left through this interface. Closing the descriptor destroys the
 // interface.
 type UTUN struct {
@@ -91,22 +89,27 @@ func (u *UTUN) SetAddr(t testing.TB, local, peer netip.Addr) {
 	Ifconfig(t, u.Name, "inet", local.String(), peer.String(), "up")
 }
 
-// ReadPacket returns the next IP packet that left through the interface,
-// without the utun header. It fails when no packet arrives before timeout.
-func (u *UTUN) ReadPacket(t testing.TB, timeout time.Duration) []byte {
+// WaitPacket reads the packets that leave through the interface until match
+// accepts one. match gets each packet without the utun header. WaitPacket
+// returns false when no packet matches before timeout.
+func (u *UTUN) WaitPacket(t testing.TB, timeout time.Duration, match func(packet []byte) bool) bool {
 	t.Helper()
 	if err := u.file.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		t.Fatalf("set read deadline on %s: %v", u.Name, err)
 	}
 	buf := make([]byte, 64*1024)
-	n, err := u.file.Read(buf)
-	if err != nil {
-		t.Fatalf("read packet from %s: %v", u.Name, err)
+	for {
+		n, err := u.file.Read(buf)
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return false
+		}
+		if err != nil {
+			t.Fatalf("read packet from %s: %v", u.Name, err)
+		}
+		if n >= utunHeaderLen && match(buf[utunHeaderLen:n]) {
+			return true
+		}
 	}
-	if n < utunHeaderLen {
-		t.Fatalf("read packet from %s: %v (%d bytes)", u.Name, errShortPacket, n)
-	}
-	return buf[utunHeaderLen:n]
 }
 
 // FethPair is two connected fake Ethernet interfaces. A packet sent out

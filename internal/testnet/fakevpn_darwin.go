@@ -5,6 +5,7 @@ package testnet
 import (
 	"bytes"
 	"context"
+	"net/netip"
 	"os/exec"
 	"strings"
 	"testing"
@@ -43,18 +44,28 @@ func NewFakeVPN(t testing.TB) *FakeVPN {
 	t.Helper()
 	v := &FakeVPN{}
 	v.connect(t)
-	t.Cleanup(func() { v.disconnect(t) })
+	t.Cleanup(func() { v.Disconnect(t) })
 	return v
 }
 
 // Iface returns the name of the current utun.
 func (v *FakeVPN) Iface() string { return v.utun.Name }
 
+// Gateway returns the next hop of the global routes.
+func (v *FakeVPN) Gateway() netip.Addr { return netip.MustParseAddr(vpnGateway) }
+
+// WaitPacket reads the packets that leave through the current utun until
+// match accepts one. It returns false when no packet matches before timeout.
+func (v *FakeVPN) WaitPacket(t testing.TB, timeout time.Duration, match func(packet []byte) bool) bool {
+	t.Helper()
+	return v.utun.WaitPacket(t, timeout, match)
+}
+
 // Reconnect closes the utun and connects again on a new one, as OpenVPN does
 // after the tunnel drops.
 func (v *FakeVPN) Reconnect(t testing.TB) {
 	t.Helper()
-	v.disconnect(t)
+	v.Disconnect(t)
 	v.connect(t)
 }
 
@@ -69,10 +80,10 @@ func (v *FakeVPN) connect(t testing.TB) {
 	}
 }
 
-// disconnect removes the routes and the utun. The kernel removes the routes
-// of the utun with it, but an explicit delete does not depend on that. It
-// does nothing when the VPN is already down.
-func (v *FakeVPN) disconnect(t testing.TB) {
+// Disconnect removes the routes and the utun, as OpenVPN does when it stops.
+// The kernel removes the routes of the utun with it, but an explicit delete
+// does not depend on that. It does nothing when the VPN is already down.
+func (v *FakeVPN) Disconnect(t testing.TB) {
 	t.Helper()
 	if v.utun == nil {
 		return
