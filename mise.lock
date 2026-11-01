@@ -268,6 +268,21 @@ url = "https://github.com/j178/prek/releases/download/v0.5.7/prek-x86_64-pc-wind
 url_api = "https://api.github.com/repos/j178/prek/releases/assets/660929530"
 provenance = "github-attestations"
 
+[[tools.tart]]
+version = "2.41.1"
+backend = "aqua:openai/tart"
+specifiers = ["2.41.1"]
+
+[tools.tart."platforms.macos-arm64"]
+checksum = "sha256:e680a734febccfce7d4e910c1f7f13fc3b00f19a181c945e2d746de3214c32c2"
+url = "https://github.com/openai/tart/releases/download/2.41.1/tart.tar.gz"
+url_api = "https://api.github.com/repos/openai/tart/releases/assets/644183490"
+
+[tools.tart."platforms.macos-x64"]
+checksum = "sha256:e680a734febccfce7d4e910c1f7f13fc3b00f19a181c945e2d746de3214c32c2"
+url = "https://github.com/openai/tart/releases/download/2.41.1/tart.tar.gz"
+url_api = "https://api.github.com/repos/openai/tart/releases/assets/644183490"
+
 [[tools.zizmor]]
 version = "1.31.1"
 backend = "aqua:zizmorcore/zizmor"

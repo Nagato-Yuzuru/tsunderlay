@@ -7,6 +7,8 @@
 
 # go build output.
 /tsunderlay
+# End-to-end test binaries and guest logs.
+/bin/
 #--------------------------------------------------#
 # The following was generated with gitignore.nvim: #
 # Gitignore for the following technologies: Go, Vim, macOS

@@ -19,6 +19,18 @@
     automerge: false,
     labels: ["security"],
   },
+  customManagers: [
+    {
+      // The base image of the end-to-end guest in mise.toml. The image has
+      // only the tag "latest", so the digest is the version.
+      customType: "regex",
+      managerFilePatterns: ["/(^|/)mise\\.toml$/"],
+      matchStrings: [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\n\\w+ = \"[^\"@]+@(?<currentDigest>sha256:[0-9a-f]+)\"",
+      ],
+      currentValueTemplate: "latest",
+    },
+  ],
   packageRules: [
     {
       // One PR each week holds all non-major updates, so that the CI runs
@@ -34,6 +46,22 @@
       matchManagers: ["gomod"],
       matchDepTypes: ["indirect"],
       enabled: true,
+    },
+    {
+      // tsunderlay works around the behavior of tailscale.com/net/netns, and
+      // the guest tests pin the version that Rex uses. CI does not run the
+      // guest tests, so a person runs `mise run vm:e2e` before the merge.
+      matchPackageNames: ["tailscale.com"],
+      groupName: null,
+      automerge: false,
+      labels: ["tailscale"],
+    },
+    {
+      // CI does not use the guest image. A person runs `mise run vm:e2e`
+      // with a new digest before the merge.
+      matchDepNames: ["ghcr.io/cirruslabs/macos-golden-gate-base"],
+      groupName: null,
+      automerge: false,
     },
     {
       // A Go point release usually fixes a vulnerability in the standard

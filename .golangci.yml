@@ -1,8 +1,9 @@
 version: "2"
 
 run:
-  # The end-to-end tests have their own build tag. Without it, lint skips them.
-  build-tags: [e2e]
+  # The end-to-end tests have their own build tags. Without them, lint skips
+  # them. Lint does not run the guest-only tests, so e2e_guest is safe here.
+  build-tags: [e2e, e2e_guest]
 
 linters:
   default: none
