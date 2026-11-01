@@ -54,19 +54,70 @@ e2e -test.run '^TestInstall' || status=$?
 exit "$status"
 '''
 
-# telemetry/manifest.yaml reads the semconv dependency from this archive.
-# Change the version here and in the manifest together.
+# The semconv version comes from the schema_url of the dependency in
+# telemetry/manifest.yaml. The registry_path in the manifest must name the
+# archive of that version, so a version change in one line only fails here.
+# The sum is that of the archive of that version: a new version without a
+# new sum fails the download.
+#
+# GitHub generates the tarball of a tag on request. GitHub does not promise
+# stable bytes, so the sum can stop matching although the tag did not move.
+# Then check the new archive and update the sum.
 [tasks."telemetry:semconv"]
 description = "Download the semconv archive that the telemetry registry depends on"
 run = '''
 set -eu
-f=.cache/weaver/semconv-v1.43.0.tar.gz
+m=telemetry/manifest.yaml
 sum=ec7886ff60f500814a6f72c9f4955fcd040c019745e6beccb0e61886feae8618
+v=$(sed -n 's#^ *- schema_url: https://opentelemetry.io/schemas/##p' "$m")
+f=.cache/weaver/semconv-v$v.tar.gz
+if ! grep -qxF "    registry_path: $f[model]" "$m"; then
+  echo "$m: the registry_path of semconv $v must be $f[model]" >&2
+  exit 1
+fi
 if [ -f "$f" ] && echo "$sum  $f" | shasum -a 256 -c --status; then exit 0; fi
 mkdir -p "${f%/*}"
-curl -fsSL -o "$f.tmp" https://github.com/open-telemetry/semantic-conventions/archive/refs/tags/v1.43.0.tar.gz
+curl -fsSL -o "$f.tmp" "https://github.com/open-telemetry/semantic-conventions/archive/refs/tags/v$v.tar.gz"
 echo "$sum  $f.tmp" | shasum -a 256 -c --status
 mv -f "$f.tmp" "$f"
+'''
+
+# A generated file must match the registry and be in the index. git diff
+# does not see a generated file that is untracked: a deleted file that the
+# generate writes again, or a new output path of a template. Thus the
+# check takes the paths from the output of the generate and fails on each
+# path with a change in the working tree (git status column 2), untracked
+# files included. A staged change passes, so the pre-commit hook passes
+# after `git add` of the generated files. The templates read the v2
+# context, so the generate needs --v2.
+[tasks."telemetry:generate"]
+description = "Generate attrs.go and docs/telemetry.md from the telemetry registry, and fail if a generated file is not in the index as generated"
+depends = ["telemetry:semconv"]
+run = '''
+set -eu
+out=$(mktemp -d)
+trap 'rm -rf "$out"' EXIT
+: >"$out/paths"
+for t in go:. markdown:docs; do
+  target=${t%%:*} dest=${t#*:}
+  weaver registry generate --v2 --quiet -r telemetry -t telemetry/.templates "$target" "$out/$target"
+  (cd "$out/$target" && find . -type f) | while IFS= read -r p; do
+    p=${p#./}
+    mkdir -p "$(dirname "$dest/$p")"
+    cp "$out/$target/$p" "$dest/$p"
+    printf '%s\0' "$dest/$p" >>"$out/paths"
+  done
+done
+# Without paths, git status would report the whole repository.
+if [ ! -s "$out/paths" ]; then
+  echo "weaver generated no files" >&2
+  exit 1
+fi
+xargs -0 git status --porcelain --untracked-files=all -- <"$out/paths" >"$out/status"
+if awk 'substr($0, 2, 1) != " " { print; bad = 1 } END { exit !bad }' "$out/status"; then
+  echo "A generated file above is not in the index as generated. Stage it." >&2
+  exit 1
+fi
 '''
 
 [tasks."vm:e2e:build"]

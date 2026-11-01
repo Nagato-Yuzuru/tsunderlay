@@ -1,6 +1,17 @@
 {#- Renders docs/telemetry.md from the v2 context of the registry in telemetry/. -#}
 {% set semconv_base = "https://opentelemetry.io/schemas/" %}
-{% set semconv = ctx.registry.attribute_groups | selectattr("id", "eq", "tsunderlay.semconv") | first %}
+{# The semconv attributes are the attributes that any group or signal
+   references and the registry does not define. attrs.go.j2 collects them in
+   the same way: change both together. #}
+{% set r = ctx.registry %}
+{% set c = namespace(refs=[]) %}
+{% for g in r.attribute_groups + r.events + r.spans + r.metrics + ctx.refinements.events + ctx.refinements.spans + ctx.refinements.metrics %}
+{% set c.refs = c.refs + (g.attributes | default([])) %}
+{% endfor %}
+{% for e in r.entities %}
+{% set c.refs = c.refs + (e.identity | default([])) + (e.description | default([])) %}
+{% endfor %}
+{% set semconv_attrs = c.refs | rejectattr("key", "in", r.attributes | map(attribute="key") | list) | sort(attribute="key") | unique(attribute="key") | list %}
 {% set ns = namespace(version="") %}
 {% for dep in ctx.dependency_graph[ctx.schema_url] if dep.startswith(semconv_base) %}
 {% set ns.version = dep[semconv_base | length:] %}
@@ -46,9 +57,9 @@ These attributes come from
 
 | Key | Type | Stability | Description |
 | --- | --- | --- | --- |
-{% for attr in semconv.attributes %}
+{% for attr in semconv_attrs %}
 | `{{ attr.key }}` | {{ type_name(attr) }} | {{ attr.stability }} | {{ cell(attr.brief) }} |
 {% endfor %}
-{% for attr in semconv.attributes if attr.annotations.go.members is defined %}
+{% for attr in semconv_attrs if attr.annotations is defined and attr.annotations.go.members is defined %}
 {{ values(attr, attr.annotations.go.members) }}
 {%- endfor %}

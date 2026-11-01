@@ -22,15 +22,16 @@ import (
 // run only in the tart guest of `mise run vm:e2e`.
 
 const (
-	controlHost = "controlplane.tailscale.com"
 	// controlAddr is in TEST-NET-1 (RFC 5737). Nothing answers there.
 	controlAddr = "192.0.2.10"
 	hostsPath   = "/etc/hosts"
 )
 
-// hostsFile edits /etc/hosts. The pure Go resolver of a CGO_ENABLED=0
-// binary reads /etc/hosts, so a lookup of a mapped name gets the mapped
-// address.
+// hostsFile edits /etc/hosts. On darwin, Go resolves through the system
+// resolver also in a CGO_ENABLED=0 binary. An "ip4" lookup of a mapped name
+// gets the mapped address from /etc/hosts and does not use DNS. An "ip"
+// lookup also asks DNS for AAAA records, so it waits on the DNS server of
+// the guest.
 type hostsFile struct{ orig []byte }
 
 // editHosts saves /etc/hosts and restores it when the test ends.
@@ -68,17 +69,6 @@ func (h *hostsFile) write(t *testing.T, b []byte) {
 	}
 }
 
-// mapControlHost maps controlHost to controlAddr in /etc/hosts until the
-// test ends.
-func mapControlHost(t *testing.T) {
-	t.Helper()
-	editHosts(t).Map(t, controlHost, controlAddr)
-	addrs, err := net.DefaultResolver.LookupHost(t.Context(), controlHost)
-	if err != nil || len(addrs) != 1 || addrs[0] != controlAddr {
-		t.Fatalf("LookupHost(%s) = %v, %v; want [%s]", controlHost, addrs, err, controlAddr)
-	}
-}
-
 // newNetMon returns a started network monitor, as tailscaled has.
 // netns.NewDialer panics on a nil monitor.
 func newNetMon(t *testing.T) *netmon.Monitor {
@@ -110,10 +100,11 @@ func newNetMon(t *testing.T) *netmon.Monitor {
 //     the default route interface.
 //
 // A dial that times out means that the packet left through the VPN, so the
-// failure did not occur.
+// failure did not occur. The test dials an IP literal: the bind does not
+// depend on the name, and a name lookup would depend on the DNS server of
+// the guest.
 func TestFakeVPNBreaksTailscaleDialers(t *testing.T) {
 	requireE2E(t)
-	mapControlHost(t)
 	vpn := testnet.NewFakeVPN(t)
 	t.Logf("fake VPN on %s", vpn.Iface())
 	netMon := newNetMon(t)
@@ -135,15 +126,15 @@ func TestFakeVPNBreaksTailscaleDialers(t *testing.T) {
 			d := netns.NewDialer(t.Logf, netMon)
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
-			conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(controlHost, "443"))
+			conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(controlAddr, "443"))
 			if err == nil {
 				_ = conn.Close() //nolint:errcheck // the test fails below
-				t.Fatalf("dial %s succeeded; want ENETUNREACH", controlHost)
+				t.Fatalf("dial %s succeeded; want ENETUNREACH", controlAddr)
 			}
 			if !errors.Is(err, syscall.ENETUNREACH) {
-				t.Fatalf("dial %s: %v; want ENETUNREACH", controlHost, err)
+				t.Fatalf("dial %s: %v; want ENETUNREACH", controlAddr, err)
 			}
-			t.Logf("dial %s: %v", controlHost, err)
+			t.Logf("dial %s: %v", controlAddr, err)
 		})
 	}
 }
