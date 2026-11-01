@@ -37,19 +37,20 @@ type Uninstaller struct {
 // It removes the lock file last, while it holds the lock.
 //
 // When a user other than root can change HelperDir, Uninstall still stops
-// the job, removes the plist, and deletes the owned routes: the job runs a
+// the job, removes the plist and the rotation rule, and deletes the owned
+// routes: the job runs a
 // binary that such a user can replace. It does not touch a file in
 // HelperDir, and then returns ErrUnsafeDir.
 //
 // Errors: ErrNotRoot without root; ErrUnsafeDir when a user other than root
-// can change a directory on the path to an installed file (for DaemonDir,
-// before any change); ErrLaunchctl when launchctl fails. After an error, a
+// can change a directory on the path to an installed file (for DaemonDir
+// and NewsyslogDir, before any change); ErrLaunchctl when launchctl fails. After an error, a
 // repeat run removes what is left.
 func (u Uninstaller) Uninstall(ctx context.Context, w io.Writer) (err error) {
 	if u.EUID != 0 {
 		return ErrNotRoot
 	}
-	if err := checkDirs(u.FS, DaemonDir); err != nil {
+	if err := checkFixedDirs(u.FS); err != nil {
 		return err
 	}
 	helperErr := prepareHelperDir(u.FS)

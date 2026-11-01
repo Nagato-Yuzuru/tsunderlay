@@ -98,6 +98,7 @@ func TestUninstallRemovesAFullInstallation(t *testing.T) {
 	want := lines(
 		"booted out "+Service,
 		"removed "+PlistPath,
+		"removed "+RotationPath,
 		"removed "+BinaryPath,
 		"deleted the owned route 10.8.0.1/32 on utun4",
 		"deleted the owned route 192.200.0.0/24 on en0",
@@ -113,6 +114,7 @@ func TestUninstallRemovesAFullInstallation(t *testing.T) {
 		"print " + Service,
 		"bootout " + Service,
 		"remove " + PlistPath,
+		"remove " + RotationPath,
 		"remove " + BinaryPath,
 		"route delete 10.8.0.1/32",
 		"route delete 192.200.0.0/24",
@@ -253,10 +255,11 @@ func TestFailedUninstallIsCompletedByTheNextRun(t *testing.T) {
 			name:      "bootout fails",
 			fail:      func(h *host, _ *fakeRoutes) { h.ld.fail = "bootout" },
 			wantErr:   ErrLaunchctl,
-			wantFiles: []string{PlistPath, BinaryPath, LockPath},
+			wantFiles: []string{PlistPath, RotationPath, BinaryPath, LockPath},
 			wantNext: lines(
 				"booted out "+Service,
 				"removed "+PlistPath,
+				"removed "+RotationPath,
 				"removed "+BinaryPath,
 				"deleted the owned route 10.8.0.1/32 on utun4",
 				kept,
@@ -296,20 +299,24 @@ func TestFailedUninstallIsCompletedByTheNextRun(t *testing.T) {
 	}
 }
 
-// DaemonDir holds the plist, so an unsafe DaemonDir stops Uninstall before
-// any change.
-func TestUninstallUnsafeDaemonDirRefusesBeforeAnyAccess(t *testing.T) {
-	h := newHost()
-	h.mustInstall(t)
-	h.fs.dirs["/Library"] = FileStat{UID: 501, Mode: fs.ModeDir | 0o755}
+// DaemonDir holds the plist and NewsyslogDir the rotation rule, so an
+// unsafe one stops Uninstall before any change.
+func TestUninstallUnsafeFixedDirRefusesBeforeAnyAccess(t *testing.T) {
+	for _, dir := range []string{"/Library", "/private/etc"} {
+		t.Run(dir, func(t *testing.T) {
+			h := newHost()
+			h.mustInstall(t)
+			h.fs.dirs[dir] = FileStat{UID: 501, Mode: fs.ModeDir | 0o755}
 
-	out, err := h.uninstall(t, &fakeRoutes{table: []underlay.Route{ownedR2}})
+			out, err := h.uninstall(t, &fakeRoutes{table: []underlay.Route{ownedR2}})
 
-	if !errors.Is(err, ErrUnsafeDir) {
-		t.Fatalf("err = %v, want ErrUnsafeDir", err)
-	}
-	if out != "" || len(h.events) != 0 {
-		t.Errorf("output %q, events %q; want none", out, h.events)
+			if !errors.Is(err, ErrUnsafeDir) {
+				t.Fatalf("err = %v, want ErrUnsafeDir", err)
+			}
+			if out != "" || len(h.events) != 0 {
+				t.Errorf("output %q, events %q; want none", out, h.events)
+			}
+		})
 	}
 }
 
@@ -330,6 +337,7 @@ func TestUninstallUnsafeHelperDirStopsTheJobAndRefuses(t *testing.T) {
 	want := lines(
 		"booted out "+Service,
 		"removed "+PlistPath,
+		"removed "+RotationPath,
 		"deleted the owned route 10.8.0.1/32 on utun4",
 		kept,
 	)
@@ -362,6 +370,7 @@ func TestUninstallRemovesLeftTemporaryFiles(t *testing.T) {
 	}{
 		{name: "temporary plist", targets: []string{PlistPath}},
 		{name: "temporary binary", targets: []string{BinaryPath}},
+		{name: "temporary rotation rule", targets: []string{RotationPath}},
 		{name: "temporary change mark and plist", targets: []string{PlistPath, PendingPath}},
 		{name: "temporary env file of the system app", targets: []string{SystemAppEnvPath}},
 	}

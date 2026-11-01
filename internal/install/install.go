@@ -49,7 +49,29 @@ const (
 	LockPath = BinaryPath + ".lock"
 	// LogPath receives the standard error of the daemon.
 	LogPath = "/var/log/tsunderlay.log"
+	// NewsyslogDir holds the rotation rules of newsyslog. It is the real
+	// path of /etc/newsyslog.d: /etc is a symbolic link, and checkDirs
+	// refuses a link. Each macOS has it.
+	NewsyslogDir = "/private/etc/newsyslog.d"
+	// RotationPath is the newsyslog rule that rotates LogPath.
+	RotationPath = NewsyslogDir + "/" + Label + ".conf"
 )
+
+// rotationRule makes newsyslog rotate LogPath. newsyslog runs each hour at
+// minute 30 (com.apple.newsyslog) and rotates the file when it is 1024 KB
+// or more. One event is a JSON line of some hundred bytes, and the daemon
+// writes at most about one each second, also with a VPN that flaps. Thus
+// the file grows by at most about 2 MB between two runs, and a quiet
+// daemon fills it in months. 5 gzip archives (Z) keep at least some hours
+// of a flapping VPN, in less disk than the live file. The size and the
+// count are the same as in the rules of macOS in /etc/newsyslog.conf.
+//
+// B: newsyslog adds no text line, so each line stays JSON. N: newsyslog
+// sends no signal. launchd opens LogPath only when it starts the job, so
+// the daemon itself opens the new file after a rotation (see followLog in
+// package main).
+const rotationRule = "# Written by tsunderlay install. Removed by tsunderlay uninstall.\n" +
+	LogPath + "\troot:wheel\t644\t5\t1024\t*\tBNZ\n"
 
 const (
 	binaryPerm fs.FileMode = 0o755
@@ -84,6 +106,7 @@ func tempPath(name string) string {
 func writtenFiles() []string {
 	return []string{
 		PlistPath, tempPath(PlistPath),
+		RotationPath, tempPath(RotationPath),
 		BinaryPath, tempPath(BinaryPath),
 		PendingPath, tempPath(PendingPath),
 		tempPath(SystemAppEnvPath),
@@ -143,9 +166,10 @@ type Installer struct {
 }
 
 // Install copies the binary at source to BinaryPath, writes the plist at
-// PlistPath, and makes launchd run the job. Each argument in controlURLs
-// becomes one --control-url argument of the job. Install writes one line to
-// w for each change, or "no change".
+// PlistPath and the rotation rule of LogPath at RotationPath, and makes
+// launchd run the job. Each argument in controlURLs becomes one
+// --control-url argument of the job. Install writes one line to w for each
+// change, or "no change".
 //
 // Install also makes sure that the environment file of the system Tailscale
 // app holds TS_BIND_TO_INTERFACE_BY_ROUTE=true. After a change of that
@@ -279,8 +303,11 @@ type state struct {
 	bin, plist   []byte
 	binChanged   bool
 	plistChanged bool
-	pending      bool
-	action       action
+	// ruleChanged needs no launchd action: newsyslog reads the rules at
+	// each run.
+	ruleChanged bool
+	pending     bool
+	action      action
 }
 
 // dirty tells whether a file changes now or changed in an earlier install
@@ -297,6 +324,9 @@ func (in Installer) state(ctx context.Context, source string, controlURLs []stri
 		return st, err
 	}
 	if st.plistChanged, err = in.differs(PlistPath, st.plist, plistPerm); err != nil {
+		return st, err
+	}
+	if st.ruleChanged, err = in.differs(RotationPath, []byte(rotationRule), plistPerm); err != nil {
 		return st, err
 	}
 	if st.pending, err = exists(in.FS, PendingPath); err != nil {
@@ -329,6 +359,12 @@ func (in Installer) writeFiles(r *reporter, source string, st state) error {
 			return fmt.Errorf("writing the plist: %w", err)
 		}
 		r.printf("wrote %s", PlistPath)
+	}
+	if st.ruleChanged {
+		if err := in.FS.WriteFile(RotationPath, []byte(rotationRule), plistPerm); err != nil {
+			return fmt.Errorf("writing the rotation rule: %w", err)
+		}
+		r.printf("wrote %s", RotationPath)
 	}
 	return nil
 }
@@ -374,10 +410,21 @@ func (in Installer) bootstrap(ctx context.Context) error {
 // prepareDirs checks the directories of the installed files, and makes
 // HelperDir when it is missing.
 func (in Installer) prepareDirs() error {
-	if err := checkDirs(in.FS, DaemonDir); err != nil {
+	if err := checkFixedDirs(in.FS); err != nil {
 		return err
 	}
 	return prepareHelperDir(in.FS)
+}
+
+// checkFixedDirs checks the directories of the installed files that each
+// macOS has: DaemonDir and NewsyslogDir.
+func checkFixedDirs(fsys FS) error {
+	for _, d := range []string{DaemonDir, NewsyslogDir} {
+		if err := checkDirs(fsys, d); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // prepareHelperDir checks HelperDir, and makes it when it is missing. Only

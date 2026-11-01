@@ -20,6 +20,7 @@ func newUninstallCmd() *cobra.Command {
 
 uninstall boots the job ` + install.Service + ` out, removes
   ` + install.PlistPath + `
+  ` + install.RotationPath + `
   ` + install.BinaryPath + `
 the change mark, and the temporary files that an interrupted install
 leaves, and then deletes each route that the daemon owns (RTF_PROTO1).

@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/Nagato-Yuzuru/tsunderlay/internal/install"
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/rib"
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/routecmd"
 )
@@ -37,7 +38,11 @@ func newRunCmd() *cobra.Command {
 			if os.Geteuid() != 0 {
 				return ErrNotRoot
 			}
-			log := slog.New(slog.NewJSONHandler(cmd.ErrOrStderr(), nil))
+			w := cmd.ErrOrStderr()
+			if f, ok := w.(*os.File); ok {
+				w = followLog(f, install.LogPath)
+			}
+			log := slog.New(slog.NewJSONHandler(w, nil))
 			return runDaemon(cmd.Context(), log, urls, hosts)
 		},
 	}

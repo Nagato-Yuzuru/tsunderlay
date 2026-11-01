@@ -166,10 +166,13 @@ func newHost() *host {
 	h.fs = &fakeFS{
 		files: map[string]file{source: {data: []byte("binary v1"), st: FileStat{UID: 501, GID: 20, Mode: 0o755}}},
 		dirs: map[string]FileStat{
-			"/":        rootDir,
-			"/Library": rootDir,
-			DaemonDir:  rootDir,
-			HelperDir:  helperDir,
+			"/":            rootDir,
+			"/Library":     rootDir,
+			DaemonDir:      rootDir,
+			HelperDir:      helperDir,
+			"/private":     rootDir,
+			"/private/etc": rootDir,
+			NewsyslogDir:   rootDir,
 			// The system app is installed, and its file is right already.
 			SystemAppContainer: rootDir,
 		},
@@ -239,6 +242,7 @@ func TestFirstInstallCopiesWritesAndBootstraps(t *testing.T) {
 	want := lines(
 		"copied "+source+" to "+BinaryPath,
 		"wrote "+PlistPath,
+		"wrote "+RotationPath,
 		"bootstrapped "+Service,
 	)
 	if out != want {
@@ -406,6 +410,7 @@ func TestTargetWithWrongTypeOwnerOrModeIsReplaced(t *testing.T) {
 		{name: "binary is a symbolic link", path: BinaryPath, st: FileStat{Mode: fs.ModeSymlink | 0o755}},
 		{name: "plist writable by all", path: PlistPath, st: FileStat{Mode: 0o666}},
 		{name: "plist owned by a user", path: PlistPath, st: FileStat{UID: 501, Mode: 0o644}},
+		{name: "rotation rule writable by all", path: RotationPath, st: FileStat{Mode: 0o666}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -512,6 +517,11 @@ func TestUnsafeDirectoryRefusesBeforeAnyAccess(t *testing.T) {
 			name:    "the plist directory writable by group",
 			change:  func(f *fakeFS) { f.dirs[DaemonDir] = FileStat{Mode: fs.ModeDir | 0o775} },
 			wantDir: DaemonDir,
+		},
+		{
+			name:    "the rule directory owned by a user",
+			change:  func(f *fakeFS) { f.dirs[NewsyslogDir] = user },
+			wantDir: NewsyslogDir,
 		},
 		{
 			// The owner of the parent of a link can point it elsewhere
@@ -720,5 +730,37 @@ func TestInstalledChecksDirectoriesBeforeReading(t *testing.T) {
 	}
 	if len(h.events) != 0 {
 		t.Errorf("events = %q, want none: the binary of an unsafe directory says nothing", h.events)
+	}
+}
+
+// The rule is a fixed text: a change of it is a change of the rotation of
+// each installed daemon. newsyslog reads the rules at each run, so a
+// changed rule needs no launchctl call.
+func TestRotationRuleIsStableAndWrittenOnlyWhenItDiffers(t *testing.T) {
+	const want = "# Written by tsunderlay install. Removed by tsunderlay uninstall.\n" +
+		"/var/log/tsunderlay.log\troot:wheel\t644\t5\t1024\t*\tBNZ\n"
+	h := newHost()
+	h.mustInstall(t)
+	rule := h.fs.files[RotationPath]
+	if string(rule.data) != want || rule.st != (FileStat{Mode: 0o644}) {
+		t.Errorf("rule %+v:\n%q\nwant root:wheel 0644:\n%q", rule.st, rule.data, want)
+	}
+
+	if out := h.mustInstall(t); out != "no change\n" {
+		t.Errorf("second install output = %q, want %q", out, "no change\n")
+	}
+	if c := h.changes(); len(c) != 0 {
+		t.Errorf("second install changes = %q, want none", c)
+	}
+
+	h.fs.files[RotationPath] = file{data: []byte("/var/log/tsunderlay.log 644 1 1 * N\n"), st: rule.st}
+	if out, want := h.mustInstall(t), lines("wrote "+RotationPath); out != want {
+		t.Errorf("install after a rule change output:\n%s\nwant:\n%s", out, want)
+	}
+	if diff := cmp.Diff([]string{"write " + RotationPath}, h.changes()); diff != "" {
+		t.Errorf("changes (-want +got):\n%s", diff)
+	}
+	if got := string(h.fs.files[RotationPath].data); got != want {
+		t.Errorf("rule after the repair = %q, want %q", got, want)
 	}
 }
