@@ -97,8 +97,8 @@ func TestUninstallRemovesAFullInstallation(t *testing.T) {
 
 	want := lines(
 		"booted out "+Service,
-		"removed "+PlistPath,
 		"removed "+RotationPath,
+		"removed "+PlistPath,
 		"removed "+BinaryPath,
 		"deleted the owned route 10.8.0.1/32 on utun4",
 		"deleted the owned route 192.200.0.0/24 on en0",
@@ -113,8 +113,8 @@ func TestUninstallRemovesAFullInstallation(t *testing.T) {
 		"lock " + LockPath,
 		"print " + Service,
 		"bootout " + Service,
-		"remove " + PlistPath,
 		"remove " + RotationPath,
+		"remove " + PlistPath,
 		"remove " + BinaryPath,
 		"route delete 10.8.0.1/32",
 		"route delete 192.200.0.0/24",
@@ -255,11 +255,11 @@ func TestFailedUninstallIsCompletedByTheNextRun(t *testing.T) {
 			name:      "bootout fails",
 			fail:      func(h *host, _ *fakeRoutes) { h.ld.fail = "bootout" },
 			wantErr:   ErrLaunchctl,
-			wantFiles: []string{PlistPath, RotationPath, BinaryPath, LockPath},
+			wantFiles: []string{RotationPath, PlistPath, BinaryPath, LockPath},
 			wantNext: lines(
 				"booted out "+Service,
-				"removed "+PlistPath,
 				"removed "+RotationPath,
+				"removed "+PlistPath,
 				"removed "+BinaryPath,
 				"deleted the owned route 10.8.0.1/32 on utun4",
 				kept,
@@ -299,24 +299,61 @@ func TestFailedUninstallIsCompletedByTheNextRun(t *testing.T) {
 	}
 }
 
-// DaemonDir holds the plist and NewsyslogDir the rotation rule, so an
-// unsafe one stops Uninstall before any change.
-func TestUninstallUnsafeFixedDirRefusesBeforeAnyAccess(t *testing.T) {
-	for _, dir := range []string{"/Library", "/private/etc"} {
-		t.Run(dir, func(t *testing.T) {
-			h := newHost()
-			h.mustInstall(t)
-			h.fs.dirs[dir] = FileStat{UID: 501, Mode: fs.ModeDir | 0o755}
+// DaemonDir holds the plist, so an unsafe DaemonDir stops Uninstall before
+// any change.
+func TestUninstallUnsafeDaemonDirRefusesBeforeAnyAccess(t *testing.T) {
+	h := newHost()
+	h.mustInstall(t)
+	h.fs.dirs["/Library"] = FileStat{UID: 501, Mode: fs.ModeDir | 0o755}
 
-			out, err := h.uninstall(t, &fakeRoutes{table: []underlay.Route{ownedR2}})
+	out, err := h.uninstall(t, &fakeRoutes{table: []underlay.Route{ownedR2}})
 
-			if !errors.Is(err, ErrUnsafeDir) {
-				t.Fatalf("err = %v, want ErrUnsafeDir", err)
-			}
-			if out != "" || len(h.events) != 0 {
-				t.Errorf("output %q, events %q; want none", out, h.events)
-			}
-		})
+	if !errors.Is(err, ErrUnsafeDir) {
+		t.Fatalf("err = %v, want ErrUnsafeDir", err)
+	}
+	if out != "" || len(h.events) != 0 {
+		t.Errorf("output %q, events %q; want none", out, h.events)
+	}
+}
+
+// An unsafe NewsyslogDir does not keep the job running: Uninstall stops the
+// job, removes the files in the safe directories, deletes the owned routes,
+// and then refuses. It does not touch the rule.
+func TestUninstallUnsafeNewsyslogDirStopsTheJobAndRefuses(t *testing.T) {
+	h := newHost()
+	h.mustInstall(t)
+	h.fs.dirs[NewsyslogDir] = FileStat{Mode: fs.ModeDir | 0o777}
+	rt := &fakeRoutes{table: []underlay.Route{ownedR2, operator}}
+
+	out, err := h.uninstall(t, rt)
+
+	if !errors.Is(err, ErrUnsafeDir) {
+		t.Fatalf("err = %v, want ErrUnsafeDir", err)
+	}
+	if !strings.Contains(err.Error(), ": "+NewsyslogDir+" (") {
+		t.Errorf("error %q does not name %s", err, NewsyslogDir)
+	}
+	want := lines(
+		"booted out "+Service,
+		"removed "+PlistPath,
+		"removed "+BinaryPath,
+		"deleted the owned route 10.8.0.1/32 on utun4",
+		kept,
+	)
+	if out != want {
+		t.Errorf("output:\n%s\nwant:\n%s", out, want)
+	}
+	if h.ld.loaded {
+		t.Error("launchd still has the job")
+	}
+	if diff := cmp.Diff([]string{RotationPath}, h.installed()); diff != "" {
+		t.Errorf("files left (-want +got):\n%s", diff)
+	}
+	if len(h.fs.lock) != 0 {
+		t.Error("the lock is held after Uninstall returned")
+	}
+	if diff := cmp.Diff([]underlay.Route{operator}, rt.table, equateRoutes); diff != "" {
+		t.Errorf("routes left (-want +got):\n%s", diff)
 	}
 }
 
@@ -336,8 +373,8 @@ func TestUninstallUnsafeHelperDirStopsTheJobAndRefuses(t *testing.T) {
 	}
 	want := lines(
 		"booted out "+Service,
-		"removed "+PlistPath,
 		"removed "+RotationPath,
+		"removed "+PlistPath,
 		"deleted the owned route 10.8.0.1/32 on utun4",
 		kept,
 	)

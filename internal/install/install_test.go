@@ -631,7 +631,16 @@ func TestDecide(t *testing.T) {
 		{loaded: true, bin: true, plist: true, pending: true, want: actReload},
 	}
 	for _, tt := range tests {
-		if got := decide(tt.loaded, tt.bin, tt.plist, tt.pending); got != tt.want {
+		// The binary has effectKickstart and the plist effectReload, and
+		// need is the larger of the two.
+		need := effectNone
+		if tt.bin {
+			need = effectKickstart
+		}
+		if tt.plist {
+			need = effectReload
+		}
+		if got := decide(tt.loaded, need, tt.pending); got != tt.want {
 			t.Errorf("decide(loaded %v, bin %v, plist %v, pending %v) = %d, want %d",
 				tt.loaded, tt.bin, tt.plist, tt.pending, got, tt.want)
 		}
@@ -738,7 +747,7 @@ func TestInstalledChecksDirectoriesBeforeReading(t *testing.T) {
 // changed rule needs no launchctl call.
 func TestRotationRuleIsStableAndWrittenOnlyWhenItDiffers(t *testing.T) {
 	const want = "# Written by tsunderlay install. Removed by tsunderlay uninstall.\n" +
-		"/var/log/tsunderlay.log\troot:wheel\t644\t5\t1024\t*\tBNZ\n"
+		"/var/log/tsunderlay.log\troot:wheel\t644\t5\t1024\t*\tBN\n"
 	h := newHost()
 	h.mustInstall(t)
 	rule := h.fs.files[RotationPath]

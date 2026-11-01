@@ -36,29 +36,44 @@ type Uninstaller struct {
 // LockPath, the same as Install, so that the two run one after the other.
 // It removes the lock file last, while it holds the lock.
 //
-// When a user other than root can change HelperDir, Uninstall still stops
-// the job, removes the plist and the rotation rule, and deletes the owned
-// routes: the job runs a
-// binary that such a user can replace. It does not touch a file in
-// HelperDir, and then returns ErrUnsafeDir.
+// When a user other than root can change HelperDir or NewsyslogDir,
+// Uninstall still stops the job, removes the files in the other
+// directories, and deletes the owned routes: the job runs a binary that
+// such a user can replace. It does not touch a file in an unsafe
+// directory, and then returns ErrUnsafeDir. It does not take the lock when
+// HelperDir is unsafe.
 //
 // Errors: ErrNotRoot without root; ErrUnsafeDir when a user other than root
-// can change a directory on the path to an installed file (for DaemonDir
-// and NewsyslogDir, before any change); ErrLaunchctl when launchctl fails. After an error, a
-// repeat run removes what is left.
+// can change a directory on the path to an installed file (for DaemonDir,
+// which holds the plist, before any change); ErrLaunchctl when launchctl
+// fails. After an error, a repeat run removes what is left.
 func (u Uninstaller) Uninstall(ctx context.Context, w io.Writer) (err error) {
 	if u.EUID != 0 {
 		return ErrNotRoot
 	}
-	if err := checkFixedDirs(u.FS); err != nil {
+	if err := checkDirs(u.FS, DaemonDir); err != nil {
 		return err
 	}
-	helperErr := prepareHelperDir(u.FS)
-	if helperErr != nil && !errors.Is(helperErr, ErrUnsafeDir) {
-		return helperErr
+	unsafe := map[string]bool{}
+	var unsafeErr error
+	for _, d := range fixedDirs() {
+		if d == DaemonDir {
+			continue
+		}
+		switch err := checkDirs(u.FS, d); {
+		case errors.Is(err, ErrUnsafeDir):
+			unsafe[d], unsafeErr = true, errors.Join(unsafeErr, err)
+		case err != nil:
+			return err
+		}
 	}
-	safeHelper := helperErr == nil
-	if safeHelper {
+	helperErr := prepareHelperDir(u.FS)
+	switch {
+	case errors.Is(helperErr, ErrUnsafeDir):
+		unsafe[HelperDir], unsafeErr = true, errors.Join(unsafeErr, helperErr)
+	case helperErr != nil:
+		return helperErr
+	default:
 		lock, lockErr := u.FS.Lock(LockPath)
 		if lockErr != nil {
 			return fmt.Errorf("locking %s: %w", LockPath, lockErr)
@@ -66,16 +81,19 @@ func (u Uninstaller) Uninstall(ctx context.Context, w io.Writer) (err error) {
 		defer func() { err = errors.Join(err, lock.Close()) }()
 	}
 	r := reporter{w: w}
-	if err := u.remove(ctx, &r, safeHelper); err != nil {
+	if err := u.remove(ctx, &r, unsafe); err != nil {
 		return err
 	}
-	if !safeHelper {
-		return helperErr
+	if unsafe[HelperDir] {
+		return unsafeErr
 	}
 	// The lock file is not a file of the installation, so it gets no line.
 	// A waiting OS.Lock sees that its file is gone, and locks a new file.
 	if err := u.FS.Remove(LockPath); err != nil {
 		return fmt.Errorf("removing %s: %w", LockPath, err)
+	}
+	if unsafeErr != nil {
+		return unsafeErr
 	}
 	if !r.changed {
 		r.printf("nothing to remove")
@@ -85,8 +103,8 @@ func (u Uninstaller) Uninstall(ctx context.Context, w io.Writer) (err error) {
 
 // remove boots the job out, removes the written files, deletes the owned
 // routes, and notes the env file of the system app. It skips the files in
-// HelperDir when safeHelper is false.
-func (u Uninstaller) remove(ctx context.Context, r *reporter, safeHelper bool) error {
+// the unsafe directories.
+func (u Uninstaller) remove(ctx context.Context, r *reporter, unsafe map[string]bool) error {
 	loaded, err := u.Launchd.Loaded(ctx, Service)
 	if err != nil {
 		return err
@@ -98,7 +116,7 @@ func (u Uninstaller) remove(ctx context.Context, r *reporter, safeHelper bool) e
 		r.printf("booted out %s", Service)
 	}
 	for _, name := range writtenFiles() {
-		if !safeHelper && filepath.Dir(name) == HelperDir {
+		if unsafe[filepath.Dir(name)] {
 			continue
 		}
 		if err := u.removeFile(r, name); err != nil {
