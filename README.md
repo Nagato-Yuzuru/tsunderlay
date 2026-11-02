@@ -128,6 +128,9 @@ sudo tsunderlay install
 runs its own copy, so the upgrade has no effect until `install` copies the new
 binary and restarts the daemon. Until then, `check` exits with status 1.
 
+`tsunderlay --version` prints the version of the binary. The daemon writes
+its version in its start event in the [log](#logs).
+
 ## Check
 
 `check` prints what the daemon sees and what it would change. It changes
@@ -139,34 +142,38 @@ tsunderlay check
 
 Give the same `--control-url` flags as for `install`.
 
-The output tells:
+The output has these lines, in this order:
 
 - `lan`: the physical interface and its gateway.
 - `vpn`: the tunnel and the gateway of the split default, `none`, or
   `ambiguous` when the two halves are on different tunnels. When the state is
   ambiguous, the daemon does not change routes.
+- `tunnels`: one line for each tunnel interface, or `none`. Each line tells
+  the routes of the tunnel: a global or scoped default, the halves of
+  a split default, up to five other routes and the number of the rest, or
+  `no global route`. The line marks the tunnel of Tailscale and the tunnel
+  that tsunderlay follows.
 - `control`: the control hosts and their /24 prefixes. When a host does not
   resolve, the next line tells so, and the daemon keeps its control routes.
+- `warning`: a control prefix that is not in the list on the
+  [Tailscale firewall page](https://tailscale.com/kb/1082/firewall-ports).
+  `check` compares only when each control host is a host of Tailscale. The
+  routes still come from DNS.
+- `warning`: a route on another tunnel that goes into the Tailscale address
+  range `100.64.0.0/10` or into a control prefix. The tunnel of Tailscale and
+  the tunnel that tsunderlay follows do not count. tsunderlay does not fix
+  this overlap.
 - `blocked`: a needed route that a route of yours holds, with the command that
   deletes your route. tsunderlay does not delete a route that it did not add,
   unless that route cannot work.
 - `plan`: each route change as a `/sbin/route` command line, or `none`.
+- `retire`: each [retirement](#retirement) part with the upstream defect that
+  retires it.
 - The state of the installed daemon: `not installed`, a line that tells you
   to run `sudo tsunderlay install` when the installed copy differs from this
   binary, or no line when it is the same.
 
-`check` also gives information and warnings:
-
-- It lists the other tunnels.
-- It warns when a route on another tunnel covers `100.64.0.0/10` (the
-  Tailscale address range) or a control prefix. tsunderlay does not fix this
-  overlap.
-- It warns when a resolved control prefix is not in the list on the
-  [Tailscale firewall page](https://tailscale.com/kb/1082/firewall-ports).
-  The routes still come from DNS.
-
-`check` also prints each [retirement](#retirement) part with the upstream
-issue that retires it.
+The warnings do not change the exit status.
 
 Exit status:
 
