@@ -90,7 +90,10 @@ func parseRoute(rm *route.RouteMessage, names map[int]string) (underlay.Route, b
 		Dst:    netip.PrefixFrom(dst, bits),
 		Iface:  iface,
 		Scoped: rm.Flags&syscall.RTF_IFSCOPE != 0,
-		Owned:  rm.Flags&syscall.RTF_PROTO1 != 0,
+		// The kernel copies the flags of a route, RTF_PROTO1 too, into each
+		// host route that it clones from it for a connection. A clone is a
+		// cache entry of the kernel, not a route that tsunderlay added.
+		Owned: rm.Flags&syscall.RTF_PROTO1 != 0 && rm.Flags&syscall.RTF_WASCLONED == 0,
 	}
 	// Without RTF_GATEWAY, the gateway slot holds the link or the address
 	// of the local interface, and the destination is on the link.

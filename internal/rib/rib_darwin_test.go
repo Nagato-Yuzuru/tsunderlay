@@ -68,6 +68,11 @@ func TestParse(t *testing.T) {
 			want: []underlay.Route{{Dst: netip.MustParsePrefix("192.200.0.0/24"), Iface: "en0", Scoped: true, Via: netip.MustParseAddr("192.168.1.1"), Owned: true}},
 		},
 		{
+			name: "a host route that the kernel cloned from an owned route is not owned",
+			msg:  msg(up|syscall.RTF_GATEWAY|syscall.RTF_HOST|syscall.RTF_IFSCOPE|syscall.RTF_PROTO1|syscall.RTF_WASCLONED, en0, v4("192.200.0.108"), v4("192.168.1.1"), nil),
+			want: []underlay.Route{{Dst: netip.MustParsePrefix("192.200.0.108/32"), Iface: "en0", Scoped: true, Via: netip.MustParseAddr("192.168.1.1")}},
+		},
+		{
 			name: "skips a route on an interface that went away",
 			msg:  msg(up|syscall.RTF_GATEWAY, 34, v4("0.0.0.0"), v4("198.18.64.1"), v4("128.0.0.0")),
 			want: nil,
