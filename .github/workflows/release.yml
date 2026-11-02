@@ -66,3 +66,11 @@ jobs:
           # shellcheck disable=SC2086 # an empty $prerelease must vanish
           gh release create "$TAG" --verify-tag --title "$TAG" \
             --notes-file "$RUNNER_TEMP/notes.md" $prerelease
+      # The proxy fetches a version on the first request for it. This request
+      # makes the version available to go install and pkg.go.dev at once. The
+      # proxy path writes each upper-case letter as "!" and the lower case.
+      - name: Fetch the version into the Go module proxy
+        run: |
+          module=$(sed -n 's/^module //p' go.mod)
+          escaped=$(printf '%s\n' "$module" | sed 's/[A-Z]/!\L&/g')
+          curl -fsS --retry 3 "https://proxy.golang.org/$escaped/@v/$TAG.info"
