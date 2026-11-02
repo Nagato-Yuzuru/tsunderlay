@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -74,11 +75,20 @@ func resolveControl(ctx context.Context, lookup lookupFunc, hosts []string) (und
 }
 
 // undocumentedControl returns the resolved prefixes that are not in the list
-// of the Tailscale firewall documentation. Only the default control URL has
-// such a list: hosts of a self-hosted control server give no result.
+// of the Tailscale firewall documentation. Only the control hosts of
+// tailscale.com have such a list: when any host is another one, for example
+// a self-hosted control server, it gives no result.
 func undocumentedControl(hosts []string, ps []netip.Prefix) []netip.Prefix {
-	if !slices.Equal(hosts, []string{defaultControlHost}) {
-		return nil
+	for _, h := range hosts {
+		if !slices.Contains(tailscaleControlHosts(), strings.TrimSuffix(strings.ToLower(h), ".")) {
+			return nil
+		}
 	}
 	return underlay.UndocumentedControl(ps)
+}
+
+// tailscaleControlHosts are the control hosts of tailscale.com. The firewall
+// documentation lists the same prefix for both.
+func tailscaleControlHosts() []string {
+	return []string{defaultControlHost, "login.tailscale.com"}
 }

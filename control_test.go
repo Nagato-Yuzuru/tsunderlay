@@ -120,6 +120,10 @@ func TestUndocumentedControl(t *testing.T) {
 		{name: "default URL with no answer", urls: []string{defaultControlURL}, prefixes: nil, want: nil},
 		{name: "a self-hosted URL has no list", urls: []string{"https://hs.example.com"}, prefixes: []netip.Prefix{moved}, want: nil},
 		{name: "a self-hosted URL beside the default has no list", urls: []string{defaultControlURL, "https://hs.example.com"}, prefixes: []netip.Prefix{documented, moved}, want: nil},
+		{name: "the host is case-insensitive", urls: []string{"https://ControlPlane.Tailscale.com"}, prefixes: []netip.Prefix{moved}, want: []netip.Prefix{moved}},
+		{name: "a trailing dot and a port are the same host", urls: []string{"https://controlplane.tailscale.com.:443"}, prefixes: []netip.Prefix{moved}, want: []netip.Prefix{moved}},
+		{name: "login.tailscale.com has the same list", urls: []string{"https://login.tailscale.com", defaultControlURL}, prefixes: []netip.Prefix{documented, moved}, want: []netip.Prefix{moved}},
+		{name: "a look-alike host has no list", urls: []string{"https://controlplane.tailscale.com.example"}, prefixes: []netip.Prefix{moved}, want: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

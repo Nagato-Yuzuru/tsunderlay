@@ -127,28 +127,55 @@ func block(label string, lines []string) []string {
 func tunnelLines(ts []underlay.Tunnel) []string {
 	lines := make([]string, len(ts))
 	for i, t := range ts {
-		lines[i] = t.Iface + ": " + tunnelClass(t.Class)
+		lines[i] = tunnelLine(t)
 	}
 	return lines
 }
 
-func tunnelClass(c underlay.TunnelClass) string {
-	switch c := c.(type) {
-	case underlay.Followed:
-		return "split default (0/1 and 128.0/1); tsunderlay follows it"
-	case underlay.SplitHalf:
-		return "holds one half of an ambiguous split default; no change"
-	case underlay.GlobalDefault:
-		return "global default; the LAN has no global default, so no R1"
-	case underlay.ScopedDefault:
-		return "interface-scoped default; only sockets bound to it use it"
-	case underlay.SplitTunnel:
-		return "split tunnel: " + joinPrefixes(c.Prefixes)
-	case underlay.OwnNetwork:
-		return "routes its own network only, as a second full-tunnel VPN without 0/1 and 128.0/1 does"
-	default:
-		panic(fmt.Sprintf("check: unknown tunnel class %T", c))
+// tunnelLine prints the facts of a tunnel, for example
+// "utun3 (Tailscale): scoped default; routes 100.64.0.0/10".
+func tunnelLine(t underlay.Tunnel) string {
+	name := t.Iface
+	if t.Tailscale {
+		name += " (Tailscale)"
 	}
+	var facts []string
+	if t.GlobalDefault {
+		facts = append(facts, "global default")
+	}
+	if t.ScopedDefault {
+		facts = append(facts, "scoped default")
+	}
+	switch {
+	case t.Low && t.High:
+		facts = append(facts, "global 0/1 and 128.0/1")
+	case t.Low:
+		facts = append(facts, "global 0/1 only")
+	case t.High:
+		facts = append(facts, "global 128.0/1 only")
+	}
+	if len(t.Prefixes) > 0 {
+		facts = append(facts, "routes "+listPrefixes(t.Prefixes))
+	}
+	if len(facts) == 0 {
+		facts = append(facts, "no global route")
+	}
+	if t.Followed {
+		facts = append(facts, "tsunderlay follows it")
+	}
+	return name + ": " + strings.Join(facts, "; ")
+}
+
+// maxListed bounds the prefixes in one line: a VPN can push thousands.
+const maxListed = 5
+
+// listPrefixes joins at most maxListed prefixes, and counts the others.
+func listPrefixes(ps []netip.Prefix) string {
+	s := joinPrefixes(ps[:min(len(ps), maxListed)])
+	if n := len(ps) - maxListed; n > 0 {
+		s += fmt.Sprintf(" and %d more", n)
+	}
+	return s
 }
 
 func overlapLine(o underlay.Overlap) string {
@@ -156,7 +183,7 @@ func overlapLine(o underlay.Overlap) string {
 	if o.With == underlay.CGNAT() {
 		what = "the Tailscale CGNAT range " + o.With.String()
 	}
-	return fmt.Sprintf("%s on %s overlaps %s; tsunderlay does not fix this", o.Route.Dst, o.Route.Iface, what)
+	return fmt.Sprintf("%s routes %s into %s; tsunderlay does not fix this", o.Iface, listPrefixes(o.Routes), what)
 }
 
 func partLines(ps []underlay.Part) []string {

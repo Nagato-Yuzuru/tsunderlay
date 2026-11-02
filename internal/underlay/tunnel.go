@@ -1,117 +1,39 @@
 package underlay
 
 import (
-	"fmt"
 	"net/netip"
 	"slices"
 )
 
-// Tunnel is a tunnel interface (utun, ipsec, ppp) of the routing table, with
-// its class.
+// Tunnel holds the facts that the routes of one tunnel interface (utun,
+// ipsec, ppp) show. The facts are independent: a tunnel can have several of
+// them, or none. check prints them and does not guess the VPN product from
+// them.
 type Tunnel struct {
 	Iface string
-	Class TunnelClass
+	// Followed is true when Facts.VPN is SplitDefault on this tunnel: Plan
+	// adds R1 and R2 for it.
+	Followed bool
+	// Tailscale is true when the tunnel holds the route to Quad100
+	// (100.100.100.100/32). Only the system Tailscale app adds that route.
+	Tailscale bool
+	// ScopedDefault is an interface-scoped default. Only sockets bound to
+	// the tunnel use it.
+	ScopedDefault bool
+	// GlobalDefault is a global default. Then the LAN has no global default
+	// (Facts.LAN is nil), and Plan adds no R1.
+	GlobalDefault bool
+	// Low and High are the global 0/1 and 128.0/1.
+	Low, High bool
+	// Prefixes are the other global routes, in table order. They do not
+	// include the local address of the tunnel: rib.Parse gives a global /32
+	// with no next hop for it.
+	Prefixes []netip.Prefix
 }
 
-// TunnelClass tells what the routes of a tunnel do to the Tailscale
-// underlay.
-//
-//sumtype:decl
-type TunnelClass interface{ isTunnelClass() }
-
-// Followed holds the global 0/1 and 128.0/1 (Facts.VPN is SplitDefault on
-// it). Unbound sockets use it, and Plan adds R1 and R2 for it.
-type Followed struct{}
-
-// SplitHalf holds a global 0/1 or 128.0/1 of an Ambiguous state.
-type SplitHalf struct{}
-
-// GlobalDefault holds the global default route. Then the LAN has no global
-// default (Facts.LAN is nil), and Plan adds no R1. macOS keeps a scoped
-// default on the physical interface, so dials bound to it still work.
-type GlobalDefault struct{}
-
-// ScopedDefault holds an interface-scoped default and no global default.
-// Only sockets bound to the tunnel use it. The system Tailscale app and
-// other network-extension VPNs have this shape.
-type ScopedDefault struct{}
-
-// SplitTunnel routes specific prefixes. Peer endpoints in them go through
-// the tunnel, as for any app. Control and DERP do not.
-type SplitTunnel struct{ Prefixes []netip.Prefix }
-
-// OwnNetwork routes only its own network. A second full-tunnel VPN has this
-// shape: while another tunnel holds 0/1 and 128.0/1, the kernel refuses its
-// adds of them ("File exists"), so its traffic follows the other tunnel. A
-// split tunnel whose only prefix is its own network has the same shape.
-type OwnNetwork struct{}
-
-func (Followed) isTunnelClass()      {}
-func (SplitHalf) isTunnelClass()     {}
-func (GlobalDefault) isTunnelClass() {}
-func (ScopedDefault) isTunnelClass() {}
-func (SplitTunnel) isTunnelClass()   {}
-func (OwnNetwork) isTunnelClass()    {}
-
-// Tunnels returns each tunnel interface of the table with its class, in the
-// order of its first route in the table.
-func Tunnels(f Facts) []Tunnel {
-	var ts []Tunnel
-	for _, r := range f.Table {
-		if isTunnel(r.Iface) && !slices.ContainsFunc(ts, func(t Tunnel) bool { return t.Iface == r.Iface }) {
-			ts = append(ts, Tunnel{Iface: r.Iface, Class: classify(f, r.Iface)})
-		}
-	}
-	return ts
-}
-
-func classify(f Facts, iface string) TunnelClass {
-	switch v := f.VPN.(type) {
-	case SplitDefault:
-		if v.Tunnel.Iface == iface {
-			return Followed{}
-		}
-	case Ambiguous:
-		if v.Low.Iface == iface || v.High.Iface == iface {
-			return SplitHalf{}
-		}
-	case NoVPN:
-	default:
-		panic(fmt.Sprintf("underlay: unknown VPN state %T", v))
-	}
-
-	var scoped bool
-	var prefixes []netip.Prefix
-	for _, r := range f.Table {
-		switch {
-		case r.Iface != iface:
-		case r.Dst.Bits() == 0 && !r.Scoped:
-			return GlobalDefault{}
-		case r.Dst.Bits() == 0:
-			scoped = true
-		case !r.Scoped && !r.ownNetwork():
-			prefixes = append(prefixes, r.Dst)
-		}
-	}
-	switch {
-	case scoped:
-		return ScopedDefault{}
-	case len(prefixes) > 0:
-		return SplitTunnel{Prefixes: prefixes}
-	default:
-		return OwnNetwork{}
-	}
-}
-
-// ownNetwork reports whether r routes the network of its own interface and
-// not a prefix that a VPN pushed. A host route is the local address of a
-// point-to-point link, or a host route that the kernel cloned for a
-// connection. A network route through a next hop in the network itself is
-// the route of the interface address (route add -net <net> <local>). A
-// pushed prefix is a link route (-interface) or a route through a next hop
-// outside the prefix.
-func (r Route) ownNetwork() bool {
-	return r.Dst.IsSingleIP() || (r.Via.IsValid() && r.Dst.Contains(r.Via))
+// quad100 is the address of the Tailscale DNS server.
+func quad100() netip.Prefix {
+	return netip.PrefixFrom(netip.AddrFrom4([4]byte{100, 100, 100, 100}), 32)
 }
 
 // CGNAT is the address range of Tailscale nodes (RFC 6598).
@@ -119,43 +41,98 @@ func CGNAT() netip.Prefix {
 	return netip.PrefixFrom(netip.AddrFrom4([4]byte{100, 64, 0, 0}), 10)
 }
 
-// Overlap is a global route of a tunnel that tsunderlay does not follow,
-// which takes traffic to some addresses of With. With is CGNAT or a control
-// prefix. Plan does not fix an overlap: it is another conflict than the one
-// that R1 and R2 fix.
-type Overlap struct {
-	Route Route
-	With  netip.Prefix
+// Tunnels returns the facts of each tunnel interface of the table, in the
+// order of its first route in the table.
+func Tunnels(f Facts) []Tunnel {
+	var ts []Tunnel
+	for _, r := range f.Table {
+		if !isTunnel(r.Iface) {
+			continue
+		}
+		i := slices.IndexFunc(ts, func(t Tunnel) bool { return t.Iface == r.Iface })
+		if i < 0 {
+			ts = append(ts, Tunnel{Iface: r.Iface, Followed: followed(f.VPN, r.Iface)})
+			i = len(ts) - 1
+		}
+		ts[i].add(r)
+	}
+	return ts
 }
 
-// Overlaps returns the routes of other tunnels that overlap the CGNAT range
-// or a control prefix. It skips scoped routes, which only bound sockets use,
-// and the defaults and /1 routes, which Tunnels and Facts.VPN report. It
-// skips CGNAT on a tunnel with a scoped default: the system Tailscale app
-// routes CGNAT on its own tunnel.
+func followed(v VPN, iface string) bool {
+	s, ok := v.(SplitDefault)
+	return ok && s.Tunnel.Iface == iface
+}
+
+func (t *Tunnel) add(r Route) {
+	if r.Dst == quad100() {
+		t.Tailscale = true
+	}
+	switch {
+	case r.Scoped:
+		t.ScopedDefault = t.ScopedDefault || r.Dst.Bits() == 0
+	case r.Dst.Bits() == 0:
+		t.GlobalDefault = true
+	case r.Dst.Bits() == 1 && r.Dst.Addr().As4()[0] == 0:
+		t.Low = true
+	case r.Dst.Bits() == 1:
+		t.High = true
+	case r.Dst.IsSingleIP() && !r.Via.IsValid():
+		// The local address, or Quad100 on the Tailscale tunnel.
+	default:
+		t.Prefixes = append(t.Prefixes, r.Dst)
+	}
+}
+
+// Overlap is a set of global routes of a tunnel that tsunderlay does not
+// follow, which take traffic to some addresses of With away from the route
+// that should carry it. With is CGNAT or a control prefix. Plan does not fix
+// an overlap: it is another conflict than the one that R1 and R2 fix.
+type Overlap struct {
+	Iface  string
+	With   netip.Prefix
+	Routes []netip.Prefix
+}
+
+// Overlaps returns, for each tunnel and target, the routes that win over
+// the route that should carry the traffic:
+//
+//   - CGNAT: a route that overlaps it and is not less specific (/10 or
+//     longer) wins over the CGNAT route of the Tailscale tunnel. The
+//     Tailscale tunnel itself is the reference, so it is skipped.
+//   - A control prefix: any route more specific than /1 wins over the 0/1
+//     or 128.0/1 of the followed tunnel, which unbound control traffic
+//     takes otherwise.
+//
+// Scoped routes only take bound sockets, and Tunnel.Prefixes holds no
+// scoped route, no default, and no /1.
 func Overlaps(f Facts) []Overlap {
-	tunnels := Tunnels(f)
 	var overlaps []Overlap
-	for _, r := range f.Table {
-		i := slices.IndexFunc(tunnels, func(t Tunnel) bool { return t.Iface == r.Iface })
-		if i < 0 || r.Scoped || r.Dst.Bits() <= 1 {
+	for _, t := range Tunnels(f) {
+		if t.Followed {
 			continue
 		}
-		var with []netip.Prefix
-		switch tunnels[i].Class.(type) {
-		case Followed:
-			continue
-		case ScopedDefault:
-		case SplitHalf, GlobalDefault, SplitTunnel, OwnNetwork:
-			with = append(with, CGNAT())
-		default:
-			panic(fmt.Sprintf("underlay: unknown tunnel class %T", tunnels[i].Class))
+		if !t.Tailscale {
+			overlaps = appendOverlap(overlaps, t, CGNAT(), func(p netip.Prefix) bool {
+				return p.Bits() >= CGNAT().Bits() && p.Overlaps(CGNAT())
+			})
 		}
-		for _, p := range append(with, f.Control.Prefixes...) {
-			if r.Dst.Overlaps(p) {
-				overlaps = append(overlaps, Overlap{Route: r, With: p})
-			}
+		for _, c := range f.Control.Prefixes {
+			overlaps = appendOverlap(overlaps, t, c, c.Overlaps)
 		}
 	}
 	return overlaps
+}
+
+func appendOverlap(overlaps []Overlap, t Tunnel, with netip.Prefix, wins func(netip.Prefix) bool) []Overlap {
+	var routes []netip.Prefix
+	for _, p := range t.Prefixes {
+		if wins(p) {
+			routes = append(routes, p)
+		}
+	}
+	if len(routes) == 0 {
+		return overlaps
+	}
+	return append(overlaps, Overlap{Iface: t.Iface, With: with, Routes: routes})
 }

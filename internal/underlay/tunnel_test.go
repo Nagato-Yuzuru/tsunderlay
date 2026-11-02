@@ -7,20 +7,33 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// More tunnel shapes, hand-written after the tables of the development Macs.
+// Tunnel routes in the shapes that rib.Parse gives: the local address of a
+// tunnel is a global /32 with no next hop (UH), a VPN network goes through
+// the local address, and a cloned host route is scoped with a next hop.
 var (
-	// The system Tailscale app: a scoped default, the CGNAT range, and the
-	// Quad100 host route, all on its own utun.
+	addr = netip.MustParseAddr
+
+	// Astrill on utun5, as on the development Mac.
+	astrillLocal  = Route{Dst: pfx("198.18.64.142/32"), Iface: "utun5"}
+	astrillNet    = Route{Dst: pfx("198.18.64.0/20"), Iface: "utun5", Via: addr("198.18.64.142")}
+	astrillCloned = Route{Dst: pfx("203.0.113.80/32"), Iface: "utun5", Scoped: true, Via: vpnGw}
+
+	// The system Tailscale app on utun3: a scoped default, the CGNAT range,
+	// Quad100, its local address, and a cloned route to a peer.
 	tsCGNAT   = Route{Dst: pfx("100.64.0.0/10"), Iface: "utun3"}
 	tsQuad100 = Route{Dst: pfx("100.100.100.100/32"), Iface: "utun3"}
-	// A work VPN that pushes one prefix as a link route.
-	workSplit = Route{Dst: pfx("10.253.0.0/16"), Iface: "utun6"}
-	workSelf  = Route{Dst: pfx("10.253.4.9/32"), Iface: "utun6", Via: netip.MustParseAddr("10.253.4.9")}
-	// A second full-tunnel VPN beside Astrill. The kernel refused its 0/1
-	// and 128.0/1, so only the routes of its own network are left.
-	secondNet  = Route{Dst: pfx("198.18.96.0/20"), Iface: "utun7", Via: netip.MustParseAddr("198.18.96.2")}
-	secondSelf = Route{Dst: pfx("198.18.96.2/32"), Iface: "utun7", Via: netip.MustParseAddr("198.18.96.2")}
+	tsLocal   = Route{Dst: pfx("100.101.2.3/32"), Iface: "utun3"}
+	tsCloned  = Route{Dst: pfx("100.101.9.9/32"), Iface: "utun3", Scoped: true, Via: addr("100.101.2.3")}
 )
+
+func withAstrill(extra ...Route) []Route {
+	return append([]Route{lanDefault, lanSubnet, vpnLow, vpnHigh, astrillNet, astrillLocal, astrillCloned}, extra...)
+}
+
+func systemTailscale() []Route { return []Route{tsScoped, tsCGNAT, tsQuad100, tsLocal, tsCloned} }
+
+// astrillTunnel is the facts of utun5 in withAstrill.
+var astrillTunnel = Tunnel{Iface: "utun5", Followed: true, Low: true, High: true, Prefixes: []netip.Prefix{astrillNet.Dst}}
 
 func TestTunnels(t *testing.T) {
 	tests := []struct {
@@ -29,61 +42,81 @@ func TestTunnels(t *testing.T) {
 		want  []Tunnel
 	}{
 		{
-			name:  "Astrill split default is followed; the system Tailscale scoped default is ignored",
-			table: astrill(tsCGNAT, tsQuad100),
+			name:  "Astrill is followed; the system Tailscale tunnel is labeled by Quad100",
+			table: withAstrill(systemTailscale()...),
 			want: []Tunnel{
-				{Iface: "utun3", Class: ScopedDefault{}},
-				{Iface: "utun5", Class: Followed{}},
+				astrillTunnel,
+				{Iface: "utun3", Tailscale: true, ScopedDefault: true, Prefixes: []netip.Prefix{tsCGNAT.Dst}},
 			},
 		},
 		{
-			name:  "a work VPN beside Astrill is a split tunnel with its pushed prefix",
-			table: astrill(workSplit, workSelf),
+			name: "a network-extension work VPN has a scoped default and routes its prefixes",
+			table: withAstrill(
+				Route{Dst: pfx("0.0.0.0/0"), Iface: "utun6", Scoped: true},
+				Route{Dst: pfx("10.253.0.0/16"), Iface: "utun6"},
+				Route{Dst: pfx("100.64.0.0/16"), Iface: "utun6"},
+			),
 			want: []Tunnel{
-				{Iface: "utun3", Class: ScopedDefault{}},
-				{Iface: "utun5", Class: Followed{}},
-				{Iface: "utun6", Class: SplitTunnel{Prefixes: []netip.Prefix{workSplit.Dst}}},
+				astrillTunnel,
+				{Iface: "utun6", ScopedDefault: true, Prefixes: []netip.Prefix{pfx("10.253.0.0/16"), pfx("100.64.0.0/16")}},
 			},
 		},
 		{
-			name:  "a second full tunnel without 0/1 and 128.0/1 routes its own network only",
-			table: astrill(secondNet, secondSelf),
-			want: []Tunnel{
-				{Iface: "utun3", Class: ScopedDefault{}},
-				{Iface: "utun5", Class: Followed{}},
-				{Iface: "utun7", Class: OwnNetwork{}},
-			},
-		},
-		{
-			name: "a tunnel that replaced the global default",
+			name: "the system Tailscale app with an exit node holds the global default",
 			table: []Route{
-				{Dst: pfx("0.0.0.0/0"), Iface: "utun5", Via: vpnGw},
+				{Dst: pfx("0.0.0.0/0"), Iface: "utun3"},
 				{Dst: pfx("0.0.0.0/0"), Iface: "en0", Scoped: true, Via: lanGw},
-				vpnSubnet,
+				tsCGNAT, tsQuad100, tsLocal,
 			},
-			want: []Tunnel{{Iface: "utun5", Class: GlobalDefault{}}},
+			want: []Tunnel{{Iface: "utun3", Tailscale: true, GlobalDefault: true, Prefixes: []netip.Prefix{tsCGNAT.Dst}}},
 		},
 		{
-			name: "both tunnels of an ambiguous split default are halves",
-			table: []Route{
-				lanDefault, vpnLow,
-				{Dst: pfx("128.0.0.0/1"), Iface: "ipsec0", Via: netip.MustParseAddr("10.8.0.1")},
-			},
+			name:  "the system Tailscale tunnel without a scoped default is still Tailscale",
+			table: withAstrill(tsCGNAT, tsQuad100, tsLocal),
 			want: []Tunnel{
-				{Iface: "utun5", Class: SplitHalf{}},
-				{Iface: "ipsec0", Class: SplitHalf{}},
+				astrillTunnel,
+				{Iface: "utun3", Tailscale: true, Prefixes: []netip.Prefix{tsCGNAT.Dst}},
 			},
 		},
 		{
-			name: "a split tunnel lists every pushed prefix, but not scoped or cloned host routes",
-			table: []Route{
-				lanDefault,
-				{Dst: pfx("10.253.0.0/16"), Iface: "ppp0", Via: netip.MustParseAddr("172.16.0.1")},
-				{Dst: pfx("10.254.0.0/16"), Iface: "ppp0"},
-				{Dst: pfx("10.253.1.7/32"), Iface: "ppp0"},
-				{Dst: pfx("10.255.0.0/16"), Iface: "ppp0", Scoped: true},
-			},
-			want: []Tunnel{{Iface: "ppp0", Class: SplitTunnel{Prefixes: []netip.Prefix{pfx("10.253.0.0/16"), pfx("10.254.0.0/16")}}}},
+			name: "an OpenVPN subnet tunnel routes its network and a pushed prefix through a gateway inside it",
+			table: withAstrill(
+				Route{Dst: pfx("10.8.0.0/24"), Iface: "utun7", Via: addr("10.8.0.2")},
+				Route{Dst: pfx("10.8.0.2/32"), Iface: "utun7"},
+				Route{Dst: pfx("10.0.0.0/8"), Iface: "utun7", Via: addr("10.8.0.1")},
+			),
+			want: []Tunnel{astrillTunnel, {Iface: "utun7", Prefixes: []netip.Prefix{pfx("10.8.0.0/24"), pfx("10.0.0.0/8")}}},
+		},
+		{
+			name: "pushed host routes through a gateway are prefixes",
+			table: withAstrill(
+				Route{Dst: pfx("203.0.113.10/32"), Iface: "utun6", Via: addr("10.9.0.1")},
+				Route{Dst: pfx("192.200.0.104/32"), Iface: "utun6", Via: addr("10.9.0.1")},
+			),
+			want: []Tunnel{astrillTunnel, {Iface: "utun6", Prefixes: []netip.Prefix{pfx("203.0.113.10/32"), pfx("192.200.0.104/32")}}},
+		},
+		{
+			name: "a second full tunnel without 0/1 and 128.0/1 shows only its network",
+			table: withAstrill(
+				Route{Dst: pfx("198.18.96.0/20"), Iface: "utun7", Via: addr("198.18.96.2")},
+				Route{Dst: pfx("198.18.96.2/32"), Iface: "utun7"},
+			),
+			want: []Tunnel{astrillTunnel, {Iface: "utun7", Prefixes: []netip.Prefix{pfx("198.18.96.0/20")}}},
+		},
+		{
+			name:  "a lone 128.0/1 is not followed",
+			table: []Route{lanDefault, {Dst: pfx("128.0.0.0/1"), Iface: "utun5", Via: vpnGw}, astrillNet, astrillLocal},
+			want:  []Tunnel{{Iface: "utun5", High: true, Prefixes: []netip.Prefix{astrillNet.Dst}}},
+		},
+		{
+			name:  "the halves of an ambiguous split default are on two tunnels",
+			table: []Route{lanDefault, vpnLow, {Dst: pfx("128.0.0.0/1"), Iface: "ipsec0", Via: addr("10.8.0.1")}},
+			want:  []Tunnel{{Iface: "utun5", Low: true}, {Iface: "ipsec0", High: true}},
+		},
+		{
+			name:  "a tunnel with only scoped routes and its local address has no fact",
+			table: []Route{lanDefault, {Dst: pfx("10.0.0.0/8"), Iface: "ppp0", Scoped: true}, {Dst: pfx("10.3.0.2/32"), Iface: "ppp0"}},
+			want:  []Tunnel{{Iface: "ppp0"}},
 		},
 		{
 			name:  "no tunnel on a table without one",
@@ -102,10 +135,6 @@ func TestTunnels(t *testing.T) {
 }
 
 func TestOverlaps(t *testing.T) {
-	cgnatVPN := Route{Dst: pfx("100.64.0.0/10"), Iface: "utun6"}
-	wideVPN := Route{Dst: pfx("64.0.0.0/2"), Iface: "utun6"}
-	ctlVPN := Route{Dst: pfx("192.200.0.0/16"), Iface: "utun6"}
-	ctlHost := Route{Dst: pfx("192.201.0.9/32"), Iface: "utun7", Via: netip.MustParseAddr("198.18.96.2")}
 	tests := []struct {
 		name    string
 		table   []Route
@@ -113,50 +142,89 @@ func TestOverlaps(t *testing.T) {
 		want    []Overlap
 	}{
 		{
-			name:    "no overlap with Astrill, the system Tailscale app, a work VPN, and a second full tunnel",
-			table:   astrill(r2, r1, tsCGNAT, tsQuad100, workSplit, workSelf, secondNet, secondSelf),
+			name: "no overlap with Astrill, the system Tailscale app, a work VPN, and a second full tunnel",
+			table: withAstrill(append(systemTailscale(),
+				r2, r1,
+				Route{Dst: pfx("10.253.0.0/16"), Iface: "utun6"},
+				Route{Dst: pfx("198.18.96.0/20"), Iface: "utun7", Via: addr("198.18.96.2")},
+				Route{Dst: pfx("198.18.96.2/32"), Iface: "utun7"},
+			)...),
 			control: answered(ctl),
 			want:    nil,
 		},
 		{
-			name:    "a tunnel that routes the CGNAT range",
-			table:   astrill(cgnatVPN),
+			name: "a network-extension work VPN that routes a part of CGNAT",
+			table: withAstrill(append(systemTailscale(),
+				Route{Dst: pfx("0.0.0.0/0"), Iface: "utun6", Scoped: true},
+				Route{Dst: pfx("10.253.0.0/16"), Iface: "utun6"},
+				Route{Dst: pfx("100.64.0.0/16"), Iface: "utun6"},
+			)...),
 			control: answered(ctl),
-			want:    []Overlap{{Route: cgnatVPN, With: CGNAT()}},
+			want:    []Overlap{{Iface: "utun6", With: CGNAT(), Routes: []netip.Prefix{pfx("100.64.0.0/16")}}},
 		},
 		{
-			name:    "a wider tunnel route that covers the whole CGNAT range",
-			table:   astrill(wideVPN),
+			name: "one warning for all CGNAT routes of a tunnel; its local address is not one",
+			table: withAstrill(
+				Route{Dst: pfx("100.96.0.0/11"), Iface: "utun7", Via: addr("100.96.0.1")},
+				Route{Dst: pfx("100.96.0.7/32"), Iface: "utun7"},
+				Route{Dst: pfx("100.96.4.5/32"), Iface: "utun7", Via: addr("100.96.0.1")},
+				Route{Dst: pfx("100.96.4.6/32"), Iface: "utun7", Scoped: true, Via: addr("100.96.0.1")},
+			),
 			control: answered(ctl),
-			want:    []Overlap{{Route: wideVPN, With: CGNAT()}},
+			want:    []Overlap{{Iface: "utun7", With: CGNAT(), Routes: []netip.Prefix{pfx("100.96.0.0/11"), pfx("100.96.4.5/32")}}},
 		},
 		{
-			name:    "a tunnel route that covers a control prefix",
-			table:   astrill(ctlVPN),
-			control: answered(ctl, ctl2),
-			want:    []Overlap{{Route: ctlVPN, With: ctl}},
-		},
-		{
-			name:    "a host route in the second control prefix on another tunnel",
-			table:   astrill(secondNet, secondSelf, ctlHost),
-			control: answered(ctl, ctl2),
-			want:    []Overlap{{Route: ctlHost, With: ctl2}},
-		},
-		{
-			name:    "the system Tailscale app may route CGNAT, but not a control prefix",
-			table:   astrill(tsCGNAT, Route{Dst: ctl, Iface: "utun3"}),
+			name:    "a route exactly on CGNAT wins on a tie",
+			table:   withAstrill(Route{Dst: pfx("100.64.0.0/10"), Iface: "utun6"}),
 			control: answered(ctl),
-			want:    []Overlap{{Route: Route{Dst: ctl, Iface: "utun3"}, With: ctl}},
+			want:    []Overlap{{Iface: "utun6", With: CGNAT(), Routes: []netip.Prefix{CGNAT()}}},
 		},
 		{
-			name:    "the followed tunnel and scoped routes do not overlap",
-			table:   astrill(Route{Dst: pfx("192.200.0.104/32"), Iface: "utun5"}, Route{Dst: pfx("100.64.0.0/10"), Iface: "utun6", Scoped: true}),
+			name:    "a route less specific than CGNAT loses to the Tailscale route",
+			table:   withAstrill(Route{Dst: pfx("100.0.0.0/8"), Iface: "utun6"}, Route{Dst: pfx("64.0.0.0/2"), Iface: "utun7"}),
 			control: answered(ctl),
 			want:    nil,
+		},
+		{
+			name:    "the Tailscale tunnel without a scoped default may route CGNAT",
+			table:   withAstrill(tsCGNAT, tsQuad100, tsLocal),
+			control: answered(ctl),
+			want:    nil,
+		},
+		{
+			name:    "the Tailscale tunnel may not route a control prefix",
+			table:   withAstrill(append(systemTailscale(), Route{Dst: ctl, Iface: "utun3"})...),
+			control: answered(ctl),
+			want:    []Overlap{{Iface: "utun3", With: ctl, Routes: []netip.Prefix{ctl}}},
+		},
+		{
+			name: "pushed routes that cover or sit in a control prefix",
+			table: withAstrill(
+				Route{Dst: pfx("192.200.0.0/16"), Iface: "utun6"},
+				Route{Dst: pfx("203.0.113.10/32"), Iface: "utun7", Via: addr("10.9.0.1")},
+				Route{Dst: pfx("192.201.0.104/32"), Iface: "utun7", Via: addr("10.9.0.1")},
+			),
+			control: answered(ctl, ctl2),
+			want: []Overlap{
+				{Iface: "utun6", With: ctl, Routes: []netip.Prefix{pfx("192.200.0.0/16")}},
+				{Iface: "utun7", With: ctl2, Routes: []netip.Prefix{pfx("192.201.0.104/32")}},
+			},
+		},
+		{
+			name:    "the routes of the followed tunnel and scoped routes do not overlap",
+			table:   withAstrill(Route{Dst: pfx("192.200.0.0/20"), Iface: "utun5", Via: vpnGw}, Route{Dst: pfx("100.64.0.0/16"), Iface: "utun6", Scoped: true}),
+			control: answered(ctl),
+			want:    nil,
+		},
+		{
+			name:    "a /1 of an ambiguous split default is not an overlap; a /2 is",
+			table:   []Route{lanDefault, vpnLow, {Dst: pfx("128.0.0.0/1"), Iface: "utun7", Via: addr("10.8.0.1")}, {Dst: pfx("192.0.0.0/2"), Iface: "utun7"}},
+			control: answered(ctl),
+			want:    []Overlap{{Iface: "utun7", With: ctl, Routes: []netip.Prefix{pfx("192.0.0.0/2")}}},
 		},
 		{
 			name:    "a physical interface does not overlap",
-			table:   astrill(Route{Dst: pfx("100.64.0.0/10"), Iface: "en0", Via: lanGw}),
+			table:   withAstrill(Route{Dst: pfx("100.64.0.0/16"), Iface: "en0", Via: lanGw}),
 			control: answered(ctl),
 			want:    nil,
 		},

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
@@ -124,9 +125,20 @@ func TestReport(t *testing.T) {
 	addr := netip.MustParseAddr
 	pfx := netip.MustParsePrefix
 	lanDefault := underlay.Route{Dst: pfx("0.0.0.0/0"), Iface: "en0", Via: addr("192.168.2.1")}
+	astrill := []underlay.Route{
+		lanDefault,
+		{Dst: pfx("0.0.0.0/1"), Iface: "utun5", Via: addr("198.18.64.1")},
+		{Dst: pfx("128.0.0.0/1"), Iface: "utun5", Via: addr("198.18.64.1")},
+		{Dst: pfx("198.18.64.0/20"), Iface: "utun5", Via: addr("198.18.64.142")},
+		{Dst: pfx("198.18.64.142/32"), Iface: "utun5"},
+	}
 	retire := `retire:  R1 (scoped control routes, for the Rex node): Rex: embedded node starts bound to the interface
          R2 (host route to the VPN next hop, for the system app): https://github.com/tailscale/tailscale/issues/21198
          env file line TS_BIND_TO_INTERFACE_BY_ROUTE=true (for the system app): https://github.com/tailscale/tailscale/issues/21198
+`
+	plan := `plan:
+  /sbin/route -n add -proto1 -host 198.18.64.1 -interface utun5
+  /sbin/route -n add -proto1 -ifscope en0 -net 192.200.0.0/24 192.168.2.1
 `
 	tests := []struct {
 		name    string
@@ -135,28 +147,45 @@ func TestReport(t *testing.T) {
 		want    string
 	}{
 		{
-			name: "tunnels, warnings, and the retirement parts",
-			table: []underlay.Route{
-				lanDefault,
-				{Dst: pfx("0.0.0.0/0"), Iface: "utun3", Scoped: true},
-				{Dst: pfx("0.0.0.0/1"), Iface: "utun5", Via: addr("198.18.64.1")},
-				{Dst: pfx("128.0.0.0/1"), Iface: "utun5", Via: addr("198.18.64.1")},
-				{Dst: pfx("10.253.0.0/16"), Iface: "utun6"},
-				{Dst: pfx("100.64.0.0/10"), Iface: "utun6"},
-			},
+			name: "tunnel facts, warnings, and the retirement parts",
+			table: append(slices.Clone(astrill),
+				underlay.Route{Dst: pfx("0.0.0.0/0"), Iface: "utun3", Scoped: true},
+				underlay.Route{Dst: pfx("100.64.0.0/10"), Iface: "utun3"},
+				underlay.Route{Dst: pfx("100.100.100.100/32"), Iface: "utun3"},
+				underlay.Route{Dst: pfx("0.0.0.0/0"), Iface: "utun6", Scoped: true},
+				underlay.Route{Dst: pfx("10.253.0.0/16"), Iface: "utun6"},
+				underlay.Route{Dst: pfx("100.64.0.0/16"), Iface: "utun6"},
+				underlay.Route{Dst: pfx("192.200.0.104/32"), Iface: "utun6", Via: addr("10.9.0.1")},
+			),
 			control: underlay.Control{Prefixes: []netip.Prefix{pfx("192.200.0.0/24"), pfx("203.0.113.0/24")}, Complete: true},
 			want: `lan:     en0 via 192.168.2.1
 vpn:     utun5 via 198.18.64.1
-tunnels: utun3: interface-scoped default; only sockets bound to it use it
-         utun5: split default (0/1 and 128.0/1); tsunderlay follows it
-         utun6: split tunnel: 10.253.0.0/16, 100.64.0.0/10
+tunnels: utun5: global 0/1 and 128.0/1; routes 198.18.64.0/20; tsunderlay follows it
+         utun3 (Tailscale): scoped default; routes 100.64.0.0/10
+         utun6: scoped default; routes 10.253.0.0/16, 100.64.0.0/16, 192.200.0.104/32
 control: controlplane.tailscale.com -> 192.200.0.0/24, 203.0.113.0/24
 warning: control prefix 203.0.113.0/24 is not in the list of https://tailscale.com/kb/1082/firewall-ports
-warning: 100.64.0.0/10 on utun6 overlaps the Tailscale CGNAT range 100.64.0.0/10; tsunderlay does not fix this
-plan:
-  /sbin/route -n add -proto1 -host 198.18.64.1 -interface utun5
-  /sbin/route -n add -proto1 -ifscope en0 -net 192.200.0.0/24 192.168.2.1
-  /sbin/route -n add -proto1 -ifscope en0 -net 203.0.113.0/24 192.168.2.1
+warning: utun6 routes 100.64.0.0/16 into the Tailscale CGNAT range 100.64.0.0/10; tsunderlay does not fix this
+warning: utun6 routes 192.200.0.104/32 into control prefix 192.200.0.0/24; tsunderlay does not fix this
+` + plan + `  /sbin/route -n add -proto1 -ifscope en0 -net 203.0.113.0/24 192.168.2.1
+` + retire,
+		},
+		{
+			name: "a lone 128.0/1, a tunnel with no global route, and a long prefix list",
+			table: append([]underlay.Route{
+				lanDefault,
+				{Dst: pfx("128.0.0.0/1"), Iface: "utun4", Via: addr("198.18.64.1")},
+				{Dst: pfx("198.18.64.142/32"), Iface: "utun4"},
+				{Dst: pfx("10.3.0.2/32"), Iface: "ppp0"},
+			}, inverseList(5000)...),
+			control: underlay.Control{Prefixes: []netip.Prefix{pfx("192.200.0.0/24")}, Complete: true},
+			want: `lan:     en0 via 192.168.2.1
+vpn:     none (no global 0/1 and 128.0/1)
+tunnels: utun4: global 128.0/1 only
+         ppp0: no global route
+         utun9: routes 1.0.0.0/16, 1.1.0.0/16, 1.2.0.0/16, 1.3.0.0/16, 1.4.0.0/16 and 4995 more
+control: controlplane.tailscale.com -> 192.200.0.0/24
+plan:    none
 ` + retire,
 		},
 		{
@@ -180,4 +209,15 @@ plan:    none
 			}
 		})
 	}
+}
+
+// inverseList is a tunnel that routes n /16s outside CGNAT and the control
+// prefixes, as a VPN with an inverse route list does.
+func inverseList(n int) []underlay.Route {
+	rs := make([]underlay.Route, n)
+	for i := range rs {
+		a := netip.AddrFrom4([4]byte{byte(1 + i/256), byte(i % 256), 0, 0})
+		rs[i] = underlay.Route{Dst: netip.PrefixFrom(a, 16), Iface: "utun9", Via: netip.MustParseAddr("10.7.0.1")}
+	}
+	return rs
 }

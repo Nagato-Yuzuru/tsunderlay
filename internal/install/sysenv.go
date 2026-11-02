@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+
+	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
 )
 
 // The environment file of the network extension of the system Tailscale app.
@@ -24,11 +26,11 @@ const (
 // app. The network extension binds each dial to the default interface. With
 // this setting it looks up the route of each dial, so the dial follows the
 // routes of this daemon. It is a stopgap part: underlay.Parts names the
-// upstream issue that retires it. Remove the line when the extension stops
+// upstream fix that retires it. Remove the line when the extension stops
 // binding by default.
 const (
-	bindByRouteKey = "TS_BIND_TO_INTERFACE_BY_ROUTE"
-	bindByRoute    = bindByRouteKey + "=true"
+	bindByRouteKey = underlay.BindByRouteKey
+	bindByRoute    = underlay.BindByRouteLine
 )
 
 // ErrEnvNotRegular means that the environment file of the system app is not
