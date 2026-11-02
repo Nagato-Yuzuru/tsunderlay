@@ -79,14 +79,22 @@ jobs:
       - run: sudo touch /var/db/tsunderlay-e2e-disposable
       - run: mise run e2e
 
-  # The only required check of this workflow. A skipped job counts as
-  # passed; a failed or cancelled job fails it. A new job must be added
-  # to needs.
+  # The only required check of this workflow. It passes only when each job
+  # in needs succeeded. No job has a condition, so each other result fails
+  # it, also a result that is neither "failure" nor "cancelled", for example
+  # that of a job that no runner took. A new job must be added to needs.
   ci-ok:
     needs: [check, test, e2e]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
-        run: exit 1
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          failed=$(printf '%s' "$RESULTS" | jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"')
+          if [ -n "$failed" ]; then
+            echo "::error::A needed job did not succeed"
+            printf '%s\n' "$failed"
+            exit 1
+          fi
