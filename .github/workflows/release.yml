@@ -1,11 +1,20 @@
-# The owner pushes a tag vX.Y.Z on main. This workflow makes the GitHub
-# Release with the notes that git-cliff generates for that tag. It builds no
-# binary. The operator installs with `go install ...@vX.Y.Z`.
+# The owner runs this workflow on main with a version vX.Y.Z. The workflow
+# makes a draft GitHub Release with the notes that git-cliff generates. The
+# owner edits the draft and publishes it. Then GitHub makes the tag on the
+# commit that the draft targets, and the tag and the release become immutable.
+# The workflow builds no binary. The operator installs with
+# `go install ...@vX.Y.Z`.
 name: release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version to release, for example v0.1.0"
+        required: true
+        type: string
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -19,7 +28,8 @@ env:
   MISE_LOCKED: "1"
 
 jobs:
-  release:
+  draft:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -27,45 +37,69 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.ref_name }}
+      VERSION: ${{ inputs.version }}
     steps:
-      # git-cliff and the main check need the full history and all tags.
+      # The draft targets the commit of this run. A later commit on main
+      # does not go into the release, and the notes stay correct.
+      - name: Check the branch
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Run this workflow on main, not on $GITHUB_REF"
+            exit 1
+          fi
+      # Semver 2.0.0 with the prefix v. A version with a pre-release part
+      # makes a pre-release.
+      - name: Check the version
+        run: |
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          if ! printf '%s\n' "$VERSION" | grep -Eq "$semver"; then
+            echo "::error::The version $VERSION is not a semver version with the prefix v"
+            exit 1
+          fi
+      # git-cliff needs the full history and all tags.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+      # A draft has no tag, so the tag check does not see a second draft for
+      # the same version.
+      - name: Check that the version is new
+        run: |
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "::error::The tag $VERSION exists"
+            exit 1
+          fi
+          if gh release list --limit 1000 --json tagName --jq '.[].tagName' | grep -qxF "$VERSION"; then
+            echo "::error::A release or a draft for $VERSION exists"
+            exit 1
+          fi
       - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
-        # A tag run must not restore a cache that another run wrote.
+        # A release run must not restore a cache that another run wrote.
         with:
           install_args: git-cliff
           cache: false
-      # Semver 2.0.0 with the prefix v. A tag with a pre-release part makes
-      # a pre-release.
-      - name: Check the tag name
-        run: |
-          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
-          if ! printf '%s\n' "$TAG" | grep -Eq "$semver"; then
-            echo "::error::The tag $TAG is not a semver version with the prefix v"
-            exit 1
-          fi
-      - name: Check that the tag is on main
-        run: |
-          git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
-            echo "::error::The tag $TAG is not on main"
-            exit 1
-          fi
       - name: Generate the notes
-        run: mise exec -- git-cliff --latest --output "$RUNNER_TEMP/notes.md"
-      - name: Create the release
+        run: git-cliff --unreleased --tag "$VERSION" --output "$RUNNER_TEMP/notes.md"
+      - name: Create the draft
         run: |
-          case "$TAG" in
+          case "$VERSION" in
             *-*) prerelease=--prerelease ;;
             *) prerelease= ;;
           esac
           # shellcheck disable=SC2086 # an empty $prerelease must vanish
-          gh release create "$TAG" --verify-tag --title "$TAG" \
-            --notes-file "$RUNNER_TEMP/notes.md" $prerelease
+          gh release create "$VERSION" --draft --target "$GITHUB_SHA" \
+            --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" $prerelease
+
+  published:
+    if: ${{ github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # The proxy fetches a version on the first request for it. This request
       # makes the version available to go install and pkg.go.dev at once. The
       # proxy path writes each upper-case letter as "!" and the lower case.
