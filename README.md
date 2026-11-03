@@ -112,8 +112,10 @@ You need macOS and Go.
    sudo killall io.tailscale.ipn.macsys.network-extension
    ```
 
-4. **If you use an app that embeds Tailscale (e.g. Rex):** give its node
-   this attribute in the tailnet policy. Select the node by its tag:
+4. **If you use an app that embeds Tailscale (e.g. Rex):** the app runs its
+   own Tailscale node, and it does not read the env file of the Tailscale
+   app. So the setting must come from the tailnet: give the node a node
+   attribute in your tailnet policy file, e.g.:
 
    ```hujson
    "nodeAttrs": [
@@ -124,8 +126,17 @@ You need macOS and Go.
    ],
    ```
 
-   Do not give it to the Tailscale app, and do not use the variant with the
-   `-apple-ext` suffix.
+   The node gets the attribute from the control server only after it logs
+   in. To log in, it still needs the route that tsunderlay adds. After that,
+   the attribute moves all of its traffic to the VPN.
+
+   For `target`, use a tag that you gave the node, or its Tailscale IP. A
+   tagged node is no longer owned by your user, and the IP changes when the
+   node registers again. Then restart the node (for Rex: restart the server
+   from the Rex app).
+
+   Do not give the attribute to the Tailscale app, and do not use the variant
+   with the `-apple-ext` suffix.
 
    > [!WARNING]
    > Tailscale does not support `debug-` attributes. A release can change or
