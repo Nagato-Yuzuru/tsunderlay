@@ -1,7 +1,7 @@
 # tsunderlay
 
-On macOS, Tailscale goes offline when a full-tunnel VPN is on. This happens to
-the Tailscale app and to apps that embed Tailscale, e.g. Rex. tsunderlay is a
+On macOS, Tailscale goes offline when a full-tunnel VPN is on, both in the
+Tailscale app and in apps that embed Tailscale, e.g. Rex. tsunderlay is a
 small daemon that fixes this without turning off the VPN. It adds the routes
 that Tailscale needs to reach its control server, and it adds them again after
 each VPN reconnect, Wi-Fi change, or reboot.
