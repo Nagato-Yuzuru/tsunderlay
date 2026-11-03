@@ -125,7 +125,7 @@ func TestReport(t *testing.T) {
 	addr := netip.MustParseAddr
 	pfx := netip.MustParsePrefix
 	lanDefault := underlay.Route{Dst: pfx("0.0.0.0/0"), Iface: "en0", Via: addr("192.168.2.1")}
-	astrill := []underlay.Route{
+	splitDefault := []underlay.Route{
 		lanDefault,
 		{Dst: pfx("0.0.0.0/1"), Iface: "utun5", Via: addr("198.18.64.1")},
 		{Dst: pfx("128.0.0.0/1"), Iface: "utun5", Via: addr("198.18.64.1")},
@@ -148,7 +148,7 @@ func TestReport(t *testing.T) {
 	}{
 		{
 			name: "tunnel facts, warnings, and the retirement parts",
-			table: append(slices.Clone(astrill),
+			table: append(slices.Clone(splitDefault),
 				underlay.Route{Dst: pfx("0.0.0.0/0"), Iface: "utun3", Scoped: true},
 				underlay.Route{Dst: pfx("100.64.0.0/10"), Iface: "utun3"},
 				underlay.Route{Dst: pfx("100.100.100.100/32"), Iface: "utun3"},

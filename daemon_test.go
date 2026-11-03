@@ -109,7 +109,7 @@ var (
 	vpnGw = netip.MustParseAddr("198.18.64.1")
 	ctl   = netip.MustParsePrefix("192.200.0.0/24")
 
-	astrillTable = []underlay.Route{
+	splitDefaultTable = []underlay.Route{
 		{Dst: netip.MustParsePrefix("0.0.0.0/0"), Iface: "en0", Via: lanGw},
 		{Dst: netip.MustParsePrefix("0.0.0.0/1"), Iface: "utun5", Via: vpnGw},
 		{Dst: netip.MustParsePrefix("128.0.0.0/1"), Iface: "utun5", Via: vpnGw},
@@ -161,7 +161,7 @@ func events(t *testing.T, b *bytes.Buffer) []map[string]any {
 
 func TestReconcileCorrectTableEmitsNothing(t *testing.T) {
 	var b bytes.Buffer
-	h := &fakeHost{table: append(slices.Clone(astrillTable), r1, r2)}
+	h := &fakeHost{table: append(slices.Clone(splitDefaultTable), r1, r2)}
 	h.daemon(slog.New(slog.NewJSONHandler(&b, nil))).reconcile(t.Context(), triggerBackstop)
 	if len(h.applied) != 0 || b.Len() != 0 {
 		t.Errorf("applied %v, log %q; want nothing", h.applied, b.String())
@@ -170,7 +170,7 @@ func TestReconcileCorrectTableEmitsNothing(t *testing.T) {
 
 func TestReconcileAppliedChangeEmitsOneInfoEvent(t *testing.T) {
 	var b bytes.Buffer
-	h := &fakeHost{table: append(slices.Clone(astrillTable), r1)}
+	h := &fakeHost{table: append(slices.Clone(splitDefaultTable), r1)}
 	h.daemon(slog.New(slog.NewJSONHandler(&b, nil))).reconcile(t.Context(), triggerRouteEvent)
 	if want := []underlay.Action{underlay.Add{Route: r2}}; !slices.Equal(h.applied, want) {
 		t.Fatalf("applied %v, want %v", h.applied, want)
@@ -194,7 +194,7 @@ func TestReconcileAppliedChangeEmitsOneInfoEvent(t *testing.T) {
 
 func TestReconcileFailedActionEmitsRouteError(t *testing.T) {
 	var b bytes.Buffer
-	h := &fakeHost{table: slices.Clone(astrillTable), applyErr: errors.New("route failed")}
+	h := &fakeHost{table: slices.Clone(splitDefaultTable), applyErr: errors.New("route failed")}
 	h.daemon(slog.New(slog.NewJSONHandler(&b, nil))).reconcile(t.Context(), triggerStart)
 	es := events(t, &b)
 	if len(es) != 1 || es[0]["level"] != "ERROR" || es[0]["error.type"] != errTypeRoute {
@@ -214,7 +214,7 @@ func TestReconcileFailedReadEmitsRIBError(t *testing.T) {
 
 func TestReconcileLastingDNSFailureWarnsOnce(t *testing.T) {
 	var b bytes.Buffer
-	h := &fakeHost{table: append(slices.Clone(astrillTable), r1, r2), dnsErr: errors.New("no such host")}
+	h := &fakeHost{table: append(slices.Clone(splitDefaultTable), r1, r2), dnsErr: errors.New("no such host")}
 	d := h.daemon(slog.New(slog.NewJSONHandler(&b, nil)))
 	for range 3 {
 		d.reconcile(t.Context(), triggerRouteEvent)
@@ -240,7 +240,7 @@ func TestReconcileBacksOffAPlanWithoutEffect(t *testing.T) {
 		var b bytes.Buffer
 		// apply does not change the table, like a try that the kernel
 		// refuses.
-		h := &fakeHost{table: append(slices.Clone(astrillTable), r1)}
+		h := &fakeHost{table: append(slices.Clone(splitDefaultTable), r1)}
 		d := h.daemon(slog.New(slog.NewJSONHandler(&b, nil)))
 		var waits []time.Duration
 		// A route message each 100 ms for 10 s, as the tries themselves make.
@@ -274,7 +274,7 @@ func TestReconcileRetriesSoonWhenTheFirstTryHadNoEffect(t *testing.T) {
 		var b bytes.Buffer
 		// The first add of R2 has no effect: the new tunnel is not ready.
 		// The second one works.
-		h := &fakeHost{table: append(slices.Clone(astrillTable), r1)}
+		h := &fakeHost{table: append(slices.Clone(splitDefaultTable), r1)}
 		d := h.daemon(slog.New(slog.NewJSONHandler(&b, nil)))
 		d.apply = func(_ context.Context, a underlay.Action) error {
 			h.applied = append(h.applied, a)
@@ -303,7 +303,7 @@ func TestReconcileBlockedRouteWarnsOnceAndAddsNothing(t *testing.T) {
 	// The link route keeps the operator route working, so it is not replaced.
 	link := underlay.Route{Dst: netip.MustParsePrefix("192.168.2.0/24"), Iface: "en0"}
 	operator := underlay.Route{Dst: ctl, Iface: "en0", Scoped: true, Via: netip.MustParseAddr("192.168.2.1")}
-	h := &fakeHost{table: append(slices.Clone(astrillTable), r2, link, operator)}
+	h := &fakeHost{table: append(slices.Clone(splitDefaultTable), r2, link, operator)}
 	d := h.daemon(slog.New(slog.NewJSONHandler(&b, nil)))
 	for range 3 {
 		d.reconcile(t.Context(), triggerRouteEvent)
