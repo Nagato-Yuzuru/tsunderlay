@@ -17,6 +17,7 @@ concurrency:
 env:
   MISE_DISABLE_TOOLS: tart
   MISE_LOCKED: "1"
+  MISE_NO_HOOKS: "1"
 
 jobs:
   tailscale-main:
