@@ -19,6 +19,7 @@ env:
   # mise.toml fails the install, so that a mise update can merge without
   # a review. Without this, mise-action repairs the lock and hides it.
   MISE_LOCKED: "1"
+  MISE_NO_HOOKS: "1"
 
 jobs:
   check:
