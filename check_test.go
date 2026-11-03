@@ -156,9 +156,12 @@ func TestReport(t *testing.T) {
 				underlay.Route{Dst: pfx("10.253.0.0/16"), Iface: "utun6"},
 				underlay.Route{Dst: pfx("100.64.0.0/16"), Iface: "utun6"},
 				underlay.Route{Dst: pfx("192.200.0.104/32"), Iface: "utun6", Via: addr("10.9.0.1")},
+				underlay.Route{Dst: pfx("0.0.0.0/0"), Iface: "en0", Scoped: true, Via: addr("192.168.2.1")},
+				underlay.Route{Dst: pfx("0.0.0.0/0"), Iface: "bridge100", Scoped: true},
 			),
 			control: underlay.Control{Prefixes: []netip.Prefix{pfx("192.200.0.0/24"), pfx("203.0.113.0/24")}, Complete: true},
 			want: `lan:     en0 via 192.168.2.1
+note:    en0 has an interface-scoped default; sockets bound to en0 bypass the VPN. Delete it if you added it by hand: sudo route -n delete -ifscope en0 default
 vpn:     utun5 via 198.18.64.1
 tunnels: utun5: global 0/1 and 128.0/1; routes 198.18.64.0/20; tsunderlay follows it
          utun3 (Tailscale): scoped default; routes 100.64.0.0/10

@@ -311,3 +311,27 @@ func TestBlocks(t *testing.T) {
 		t.Errorf("Blocks with a stale operator route = %v, want none: Plan replaces it", got)
 	}
 }
+
+func TestScopedLANDefault(t *testing.T) {
+	manual := Route{Dst: pfx("0.0.0.0/0"), Iface: "en0", Scoped: true, Via: lanGw}
+	bridge := Route{Dst: pfx("0.0.0.0/0"), Iface: "bridge100", Scoped: true}
+	tests := []struct {
+		name  string
+		table []Route
+		want  bool
+	}{
+		{name: "a scoped default on the LAN interface under a split default", table: astrill(manual), want: true},
+		{name: "no note for the scoped default of a vmnet bridge", table: astrill(bridge), want: false},
+		{name: "no note without a VPN", table: []Route{lanDefault, lanSubnet, manual}, want: false},
+		{name: "no note without a LAN", table: []Route{manual, vpnLow, vpnHigh, vpnSubnet}, want: false},
+		{name: "no note for the scoped default of the system Tailscale tunnel", table: astrill(), want: false},
+		{name: "no note for owned R1, a scoped route that is not a default", table: astrill(r1, r2), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ScopedLANDefault(DeriveFacts(tt.table, answered(ctl))); got != tt.want {
+				t.Errorf("ScopedLANDefault = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

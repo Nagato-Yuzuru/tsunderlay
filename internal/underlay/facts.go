@@ -2,6 +2,7 @@ package underlay
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 )
 
@@ -89,4 +90,21 @@ func isTunnel(iface string) bool {
 		}
 	}
 	return false
+}
+
+// ScopedLANDefault reports whether the LAN interface holds an
+// interface-scoped default that tsunderlay does not own, while a split
+// default is up. Every socket bound to the LAN interface then bypasses the
+// VPN. A manual workaround for the problem that R1 fixes adds this route, and
+// R1 makes it unnecessary. tsunderlay does not delete it: it does not own it,
+// and macOS can add such a route itself. Other physical interfaces are not
+// checked: macOS adds a scoped default on a vmnet bridge, which is not this
+// workaround. Without a VPN or a LAN, the result is false.
+func ScopedLANDefault(f Facts) bool {
+	if _, ok := f.VPN.(SplitDefault); !ok || f.LAN == nil {
+		return false
+	}
+	return slices.ContainsFunc(f.Table, func(r Route) bool {
+		return r.Scoped && !r.Owned && r.Dst.Bits() == 0 && r.Iface == f.LAN.Iface
+	})
 }
