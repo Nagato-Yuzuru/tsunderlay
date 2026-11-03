@@ -205,9 +205,7 @@ tsunderlay is a stopgap. Remove each part when its upstream fix ships:
 - **R2 and the env file line (the Tailscale app):** when Tailscale on macOS
   uses the VPN interface under a full-tunnel VPN.
   [tailscale#16652](https://github.com/tailscale/tailscale/issues/16652)
-  tracks this, and
-  [tailscale#16654](https://github.com/tailscale/tailscale/pull/16654)
-  proposes a fix.
+  tracks this.
 - **R1 and the node attribute (apps that embed Tailscale, e.g. Rex):** when
   the app starts its embedded node with interface binding off. The fix for
   tailscale#16652 can also fix this, after the app updates its Tailscale
