@@ -81,9 +81,16 @@ func report(f underlay.Facts, hosts []string, dnsErr error, plan []underlay.Acti
 		"lan:     " + lan(f.LAN),
 		"vpn:     " + vpn(f.VPN),
 	}
+	lines = append(lines, block("tunnels:", tunnelLines(underlay.Tunnels(f)))...)
 	lines = append(lines, fmt.Sprintf("control: %s -> %s", strings.Join(hosts, ", "), joinPrefixes(f.Control.Prefixes)))
 	if dnsErr != nil {
 		lines = append(lines, fmt.Sprintf("         no answer: %v; owned control routes stay", strings.ReplaceAll(dnsErr.Error(), "\n", "; ")))
+	}
+	for _, p := range undocumentedControl(hosts, f.Control.Prefixes) {
+		lines = append(lines, fmt.Sprintf("warning: control prefix %s is not in the list of %s", p, underlay.FirewallDocURL))
+	}
+	for _, o := range underlay.Overlaps(f) {
+		lines = append(lines, "warning: "+overlapLine(o))
 	}
 	for _, b := range blockedLines(blocked) {
 		lines = append(lines, "blocked: "+b)
@@ -96,7 +103,95 @@ func report(f underlay.Facts, hosts []string, dnsErr error, plan []underlay.Acti
 			lines = append(lines, "  "+routecmd.Line(a))
 		}
 	}
+	lines = append(lines, block("retire:", partLines(underlay.Parts()))...)
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// block puts label before the first line and indents the others under it.
+// It gives "label none" for no lines.
+func block(label string, lines []string) []string {
+	if len(lines) == 0 {
+		lines = []string{"none"}
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		prefix := strings.Repeat(" ", len("control: "))
+		if i == 0 {
+			prefix = fmt.Sprintf("%-9s", label)
+		}
+		out[i] = prefix + l
+	}
+	return out
+}
+
+func tunnelLines(ts []underlay.Tunnel) []string {
+	lines := make([]string, len(ts))
+	for i, t := range ts {
+		lines[i] = tunnelLine(t)
+	}
+	return lines
+}
+
+// tunnelLine prints the facts of a tunnel, for example
+// "utun3 (Tailscale): scoped default; routes 100.64.0.0/10".
+func tunnelLine(t underlay.Tunnel) string {
+	name := t.Iface
+	if t.Tailscale {
+		name += " (Tailscale)"
+	}
+	var facts []string
+	if t.GlobalDefault {
+		facts = append(facts, "global default")
+	}
+	if t.ScopedDefault {
+		facts = append(facts, "scoped default")
+	}
+	switch {
+	case t.Low && t.High:
+		facts = append(facts, "global 0/1 and 128.0/1")
+	case t.Low:
+		facts = append(facts, "global 0/1 only")
+	case t.High:
+		facts = append(facts, "global 128.0/1 only")
+	}
+	if len(t.Prefixes) > 0 {
+		facts = append(facts, "routes "+listPrefixes(t.Prefixes))
+	}
+	if len(facts) == 0 {
+		facts = append(facts, "no global route")
+	}
+	if t.Followed {
+		facts = append(facts, "tsunderlay follows it")
+	}
+	return name + ": " + strings.Join(facts, "; ")
+}
+
+// maxListed bounds the prefixes in one line: a VPN can push thousands.
+const maxListed = 5
+
+// listPrefixes joins at most maxListed prefixes, and counts the others.
+func listPrefixes(ps []netip.Prefix) string {
+	s := joinPrefixes(ps[:min(len(ps), maxListed)])
+	if n := len(ps) - maxListed; n > 0 {
+		s += fmt.Sprintf(" and %d more", n)
+	}
+	return s
+}
+
+func overlapLine(o underlay.Overlap) string {
+	what := "control prefix " + o.With.String()
+	if o.With == underlay.CGNAT() {
+		what = "the Tailscale CGNAT range " + o.With.String()
+	}
+	return fmt.Sprintf("%s routes %s into %s; tsunderlay does not fix this", o.Iface, listPrefixes(o.Routes), what)
+}
+
+func partLines(ps []underlay.Part) []string {
+	lines := make([]string, len(ps))
+	for i, p := range ps {
+		lines[i] = p.Name + ": " + p.Upstream
+	}
+	return lines
 }
 
 // status is the exit code of check. Three states have no plan, but are not

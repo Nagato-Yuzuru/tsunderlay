@@ -9,14 +9,18 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/Nagato-Yuzuru/tsunderlay/internal/underlay"
 )
 
-// defaultControlURL is the control plane of tailscale.com.
-const defaultControlURL = "https://controlplane.tailscale.com"
+// The control plane of tailscale.com.
+const (
+	defaultControlHost = "controlplane.tailscale.com"
+	defaultControlURL  = "https://" + defaultControlHost
+)
 
 const dnsTimeout = 5 * time.Second
 
@@ -68,4 +72,23 @@ func resolveControl(ctx context.Context, lookup lookupFunc, hosts []string) (und
 	}
 	c := underlay.Control{Prefixes: underlay.ControlPrefixes(addrs), Complete: len(errs) == 0}
 	return c, errors.Join(errs...)
+}
+
+// undocumentedControl returns the resolved prefixes that are not in the list
+// of the Tailscale firewall documentation. Only the control hosts of
+// tailscale.com have such a list: when any host is another one, for example
+// a self-hosted control server, it gives no result.
+func undocumentedControl(hosts []string, ps []netip.Prefix) []netip.Prefix {
+	for _, h := range hosts {
+		if !slices.Contains(tailscaleControlHosts(), strings.TrimSuffix(strings.ToLower(h), ".")) {
+			return nil
+		}
+	}
+	return underlay.UndocumentedControl(ps)
+}
+
+// tailscaleControlHosts are the control hosts of tailscale.com. The firewall
+// documentation lists the same prefix for both.
+func tailscaleControlHosts() []string {
+	return []string{defaultControlHost, "login.tailscale.com"}
 }
