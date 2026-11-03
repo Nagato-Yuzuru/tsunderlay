@@ -59,7 +59,7 @@ These two checks are read-only and need no root.
    ```
 
    Without Go, get the binary as in [step 1 of Install](#install), and run
-   `./tsunderlay check`.
+   `tsunderlay check`.
 
    The `plan:` lines show the routes that tsunderlay would add.
 
@@ -86,23 +86,28 @@ or reboot. tsunderlay adds them again within about one second.
 
 You need macOS.
 
-1. **Get the binary.** Download it from the latest release:
+1. **Get the binary.** Download it from the latest release, and put it on
+   your `PATH`:
 
    ```sh
    curl -fsSLO https://github.com/Nagato-Yuzuru/tsunderlay/releases/latest/download/tsunderlay-darwin-universal.tar.gz
    tar -xzf tsunderlay-darwin-universal.tar.gz
+   sudo install -d /usr/local/bin
+   sudo install -m 0755 tsunderlay /usr/local/bin/tsunderlay
    ```
 
    The binary is not notarized by Apple. A file that you download with
    `curl` runs. If you download it with a browser, macOS blocks it: run
-   `xattr -d com.apple.quarantine tsunderlay`.
+   `xattr -d com.apple.quarantine tsunderlay` before the install line.
 
    The daemon runs this file as root. To make sure that the release workflow
-   of this repository built it from the tag, verify its attestation with the
-   [GitHub CLI](https://cli.github.com):
+   of this repository built it, verify its attestation with the
+   [GitHub CLI](https://cli.github.com) before the install line:
 
    ```sh
-   gh attestation verify tsunderlay-darwin-universal.tar.gz --repo Nagato-Yuzuru/tsunderlay
+   gh attestation verify tsunderlay-darwin-universal.tar.gz \
+     --repo Nagato-Yuzuru/tsunderlay \
+     --signer-workflow Nagato-Yuzuru/tsunderlay/.github/workflows/release.yml
    ```
 
    Or build it from source with Go:
@@ -111,9 +116,8 @@ You need macOS.
    go install github.com/Nagato-Yuzuru/tsunderlay@latest
    ```
 
-   In the next steps, use `./tsunderlay` for the downloaded file. For the Go
-   build, use `tsunderlay`, or the full path
-   `"$(go env GOPATH)/bin/tsunderlay"` if `sudo` cannot find it.
+   If `sudo` cannot find the Go build in the next steps, use the full path
+   `"$(go env GOPATH)/bin/tsunderlay"`.
 
 2. **Install the daemon.**
 
@@ -198,12 +202,11 @@ Get the new binary as in [step 1 of Install](#install), and install it
 again:
 
 ```sh
-sudo ./tsunderlay install
+sudo tsunderlay install
 ```
 
 The daemon runs its own copy of the binary, so the upgrade has no effect until
-this step. For a Go build, run `go install …@latest` and
-`sudo tsunderlay install`.
+this step.
 
 ## Uninstall
 

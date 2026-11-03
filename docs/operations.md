@@ -9,11 +9,11 @@
 2. Copy it to the daemon and restart the daemon:
 
    ```sh
-   sudo ./tsunderlay install
+   sudo tsunderlay install
    ```
 
-   For a Go build, run `sudo tsunderlay install`. The daemon runs its own
-   copy of the binary, so the upgrade has no effect until this step. Until
+   The daemon runs its own copy of the binary, so the upgrade has no effect
+   until this step. Until
    then, `check` tells you that the installed daemon differs and exits with
    status 1.
 
