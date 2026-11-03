@@ -1,6 +1,5 @@
 # Operations
 
-
 ## Upgrade
 
 1. Install the new version:
