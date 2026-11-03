@@ -25,33 +25,48 @@
 
 ## Troubleshoot
 
-Run `tsunderlay check` as your user. Give the same `--control-url` flags as
-for `install`. `check` changes nothing. It prints these lines in this order:
-`lan`, `vpn`, `tunnels` (one line for each tunnel interface, with its routes,
-and a mark on the tunnel of Tailscale and on the tunnel that tsunderlay
-follows), `control`, the warnings, `blocked`, `plan` (each change as a
-`/sbin/route` command line), `retire` (each part with the upstream defect
-that [retires it](../README.md#when-to-remove-tsunderlay)), and the state of the installed
-daemon. It can also print a `note:` line.
+Run `tsunderlay check` as your user, with the same `--control-url` flags as
+for `install`. It changes nothing.
 
-| `check` output | Meaning | What to do |
+When all is well, the output looks like this, with exit status 0:
+
+```text
+lan:     en0 via 192.168.2.1
+vpn:     utun5 via 198.18.64.1
+tunnels: utun5: global 0/1 and 128.0/1; routes 198.18.64.0/20; tsunderlay follows it
+control: controlplane.tailscale.com -> 192.200.0.0/24
+plan:    none
+retire:  R1 (scoped control routes, for the Rex node): ...
+```
+
+- `lan` and `vpn`: the physical interface and the VPN that tsunderlay found.
+- `tunnels`: each tunnel interface and its routes.
+- `control`: the addresses of the control server.
+- `plan`: the routes that tsunderlay would add. `none` means that all routes
+  are in place.
+- `retire`: the upstream fix that retires each part. See
+  [When to remove](../README.md#when-to-remove-tsunderlay).
+
+Other lines:
+
+| Line | Meaning | What to do |
 | --- | --- | --- |
-| `plan:` is not `none` while the daemon is installed | The daemon did not add the routes yet, or it failed to add them. After a failure, it tries again after a wait of up to one minute. | Run `check` again after some seconds. If the plan stays, read the [log](#logs) for `ERROR` lines. |
-| `blocked:` | A route that tsunderlay did not add holds the place of a needed route, and the route can work. tsunderlay does not delete it. | If you do not need that route, run the delete command on the line. |
-| `vpn:     ambiguous` | `0/1` and `128.0/1` are on different tunnels. tsunderlay does not know which tunnel Tailscale uses, so it changes nothing. | Disconnect one of the VPNs. |
-| `no answer` under `control:` | A control host did not resolve. The daemon keeps the control routes that it added. | Check DNS and the `--control-url` values. |
-| `warning:` control prefix not in the list | A control prefix is not on the [Tailscale firewall page](https://tailscale.com/kb/1082/firewall-ports). `check` compares only when each control host is a host of Tailscale. | Compare the DNS answer with that page. The routes still come from DNS. |
-| `warning:` a tunnel routes into `100.64.0.0/10` or a control prefix | Another VPN sends Tailscale addresses or the control server into its tunnel. tsunderlay does not fix this. | Change the routes of that VPN. |
-| `note:` interface-scoped default | A default route is bound to the physical interface. Sockets bound to it bypass the VPN. | Delete it if you added it by hand: see the [note in Install](../README.md#install). |
+| `plan:` with `/sbin/route` lines, while the daemon runs | The daemon did not add the routes yet, or it failed. After a failure, it tries again within one minute. | Run `check` again after some seconds. If the plan stays, look for `ERROR` lines in the [log](#logs). |
+| `blocked:` | A route that tsunderlay did not add is in the place of a needed route. tsunderlay does not delete it. | If you do not need that route, run the delete command on the line. |
+| `vpn:     ambiguous` | `0/1` and `128.0/1` are on different tunnels. tsunderlay changes nothing. | Use one full-tunnel VPN at a time. |
+| `no answer` under `control:` | A control host did not resolve. The daemon keeps the routes that it added before. | Check DNS and the `--control-url` values. |
+| `warning: control prefix … is not in the list of …` | DNS returned an address that is not on the [Tailscale firewall page](https://tailscale.com/kb/1082/firewall-ports). | Make sure that your DNS is not filtered or changed by a network or a VPN. If the page is out of date, ignore the warning. |
+| `warning: <iface> routes … into …` | Another VPN sends Tailscale addresses (`100.64.0.0/10`) or the control server into its tunnel. tsunderlay does not fix this. | Exclude these prefixes from that VPN, or turn it off. |
+| `note:` | A default route scoped to the physical interface. Each socket bound to it bypasses the VPN. | If you added it as a workaround, run the delete command on the line. |
 | `the installed daemon differs from this binary` | The daemon runs another version. | Run `sudo tsunderlay install`. |
-| `not installed` | The daemon is not installed. This is not a failure. | Follow [Install](../README.md#install). |
+| `not installed` | The daemon is not installed. This is not an error. | Follow [Install](../README.md#install). |
 
-The warnings and the `note:` line do not change the exit status.
+Warnings and the `note:` line do not change the exit status.
 
 | Exit status | Meaning |
 | --- | --- |
 | 0 | No change is necessary. |
-| 1 | A change is necessary, the VPN state is ambiguous, a control host does not resolve, a route is blocked, or the installed daemon differs from this binary or cannot be checked. |
+| 1 | A change is necessary, or a line above other than a warning or `note:` needs your action. |
 | 2 | An error. |
 
 ## Logs
