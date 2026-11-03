@@ -133,8 +133,8 @@ func TestReport(t *testing.T) {
 		{Dst: pfx("198.18.64.142/32"), Iface: "utun5"},
 	}
 	retire := `retire:  R1 (scoped control routes, for the Rex node): Rex: embedded node starts bound to the interface
-         R2 (host route to the VPN next hop, for the system app): https://github.com/tailscale/tailscale/issues/21198
-         env file line TS_BIND_TO_INTERFACE_BY_ROUTE=true (for the system app): https://github.com/tailscale/tailscale/issues/21198
+         R2 (host route to the VPN next hop, for the system app): https://github.com/tailscale/tailscale/issues/16652
+         env file line TS_BIND_TO_INTERFACE_BY_ROUTE=true (for the system app): https://github.com/tailscale/tailscale/issues/16652
 `
 	plan := `plan:
   /sbin/route -n add -proto1 -host 198.18.64.1 -interface utun5
