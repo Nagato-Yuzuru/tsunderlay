@@ -1,9 +1,23 @@
 # Contributing
 
-Tools come from `mise.toml`: run `mise install` once. `mise run lint` runs
-golangci-lint, and `mise run test` runs the unit tests. `mise run vm:e2e` runs
-the end-to-end tests in a new tart guest. The end-to-end tests change routes
-and interfaces, so `mise run e2e` runs them on this host only when the
-root-owned file `/var/db/tsunderlay-e2e-disposable` marks the host as
-disposable. No task makes this file on your host. `prek run --all-files` runs
-the same checks as CI.
+## What to run, and when
+
+| When | Run | Does CI run it? |
+| --- | --- | --- |
+| Once, after you clone | `mise install`. It installs the pinned tools and the pre-commit hook. | — |
+| Each commit | Nothing: the pre-commit hook runs. If the hook changes files, add them and commit again. | Yes, on all files. |
+| Before you open a pull request | `go test -race ./...` | Yes. |
+| You changed a log attribute or `telemetry/` | `mise run telemetry:live-check`. The hook regenerates `attrs.go` and `docs/telemetry.md`. | Yes. |
+| You changed how routes are read or written, `install`, `uninstall`, or the daemon | `mise run vm:e2e`. It needs a Mac with Apple silicon. | Only in part: CI does not run the tests that need a guest (install, the fake VPN, the daemon). |
+
+`mise tasks` lists all tasks and what each one does.
+
+The end-to-end tests add routes and interfaces as root. `mise run vm:e2e`
+runs them in a new tart guest and deletes the guest on a pass. Do not create
+`/var/db/tsunderlay-e2e-disposable` on your own Mac: with it, `mise run e2e`
+changes the routes of the host.
+
+## Pull requests
+
+We squash-merge each pull request, and we can edit its title. The commits in
+a pull request need no special format.
