@@ -8,11 +8,10 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
-// The addresses follow the tables on the development Mac: Astrill on utun5
-// (198.18.64.1), the system Tailscale app on utun3, Wi-Fi on en0. The
-// fixtures copy the shapes of those tables by hand. Do not commit a real
-// dump: it holds a cloned host route to each site that the Mac visited, and
-// this repository is public.
+// The fixtures copy by hand the shapes of the tables on a Mac with a
+// full-tunnel VPN on utun5 (198.18.64.1), the system Tailscale app on utun3,
+// and Wi-Fi on en0. Do not commit a real dump: it holds a cloned host route
+// to each site that the Mac visited, and this repository is public.
 var (
 	lanGw    = netip.MustParseAddr("192.168.2.1")
 	newLanGw = netip.MustParseAddr("10.0.0.1")
@@ -52,7 +51,7 @@ func notOwned(r Route) Route {
 	return r
 }
 
-func astrill(extra ...Route) []Route {
+func splitDefault(extra ...Route) []Route {
 	return append([]Route{lanDefault, lanSubnet, tsScoped, vpnLow, vpnHigh, vpnSubnet}, extra...)
 }
 
@@ -65,7 +64,7 @@ func TestDeriveFacts(t *testing.T) {
 	}{
 		{
 			name:    "split default on one tunnel is a VPN; the scoped default of another tunnel is ignored",
-			table:   astrill(),
+			table:   splitDefault(),
 			wantLAN: &Link{Iface: "en0", Gateway: lanGw},
 			wantVPN: SplitDefault{Tunnel: Link{Iface: "utun5", Gateway: vpnGw}},
 		},
@@ -136,25 +135,25 @@ func TestPlan(t *testing.T) {
 	}{
 		{
 			name:    "adds R2 and R1 when the VPN comes up",
-			table:   astrill(),
+			table:   splitDefault(),
 			control: answered(ctl, ctl2),
 			want:    []Action{Add{r2}, Add{r1}, Add{r1Second}},
 		},
 		{
 			name:    "no change on a correct table",
-			table:   astrill(r2, r1),
+			table:   splitDefault(r2, r1),
 			control: answered(ctl),
 			want:    nil,
 		},
 		{
 			name:    "routes that the operator added count, and are not deleted",
-			table:   astrill(notOwned(r2), notOwned(r1)),
+			table:   splitDefault(notOwned(r2), notOwned(r1)),
 			control: answered(ctl),
 			want:    nil,
 		},
 		{
 			name:    "adds R2 again after a VPN reconnect deleted it",
-			table:   astrill(r1),
+			table:   splitDefault(r1),
 			control: answered(ctl),
 			want:    []Action{Add{r2}},
 		},
@@ -169,7 +168,7 @@ func TestPlan(t *testing.T) {
 		},
 		{
 			name:    "keeps owned R1 when DNS gave no answer",
-			table:   astrill(r2, r1, r1Second),
+			table:   splitDefault(r2, r1, r1Second),
 			control: Control{},
 			want:    nil,
 		},
@@ -184,25 +183,25 @@ func TestPlan(t *testing.T) {
 		},
 		{
 			name:    "does not keep R1 that the operator added when DNS gave no answer",
-			table:   astrill(r2, notOwned(r1)),
+			table:   splitDefault(r2, notOwned(r1)),
 			control: Control{},
 			want:    nil,
 		},
 		{
 			name:    "adds the routes of the hosts that resolved when another host gave no answer",
-			table:   astrill(r2),
+			table:   splitDefault(r2),
 			control: Control{Prefixes: []netip.Prefix{ctl}},
 			want:    []Action{Add{r1}},
 		},
 		{
 			name:    "keeps owned R1 of a host that gave no answer, and adds the others",
-			table:   astrill(r2, r1Second),
+			table:   splitDefault(r2, r1Second),
 			control: Control{Prefixes: []netip.Prefix{ctl}},
 			want:    []Action{Add{r1}},
 		},
 		{
 			name:    "follows a control plane that moved to a new /24",
-			table:   astrill(r2, r1),
+			table:   splitDefault(r2, r1),
 			control: answered(ctl2),
 			want:    []Action{Delete{r1}, Add{r1Second}},
 		},
@@ -251,37 +250,37 @@ func TestPlan(t *testing.T) {
 		},
 		{
 			name:    "does not add R1 when a working operator route holds its key with another gateway",
-			table:   astrill(r2, workingOperatorR1),
+			table:   splitDefault(r2, workingOperatorR1),
 			control: answered(ctl),
 			want:    nil,
 		},
 		{
 			name:    "does not add R2 when a working operator route holds its key with another next hop",
-			table:   astrill(r1, workingOperatorR2),
+			table:   splitDefault(r1, workingOperatorR2),
 			control: answered(ctl),
 			want:    nil,
 		},
 		{
 			name:    "replaces an operator R1 whose gateway is on no link of the interface, deletes first",
-			table:   astrill(r2, staleOperatorR1),
+			table:   splitDefault(r2, staleOperatorR1),
 			control: answered(ctl),
 			want:    []Action{Delete{staleOperatorR1}, Add{r1}},
 		},
 		{
 			name:    "does not delete a stale operator route that holds no key that the plan needs",
-			table:   astrill(r1, r2, Route{Dst: pfx("203.0.113.0/24"), Iface: "en0", Scoped: true, Via: newLanGw}),
+			table:   splitDefault(r1, r2, Route{Dst: pfx("203.0.113.0/24"), Iface: "en0", Scoped: true, Via: newLanGw}),
 			control: answered(ctl),
 			want:    nil,
 		},
 		{
 			name:    "replaces an owned R1 with another gateway: an owned route never blocks",
-			table:   astrill(r2, Route{Dst: ctl, Iface: "en0", Scoped: true, Via: newLanGw, Owned: true}),
+			table:   splitDefault(r2, Route{Dst: ctl, Iface: "en0", Scoped: true, Via: newLanGw, Owned: true}),
 			control: answered(ctl),
 			want:    []Action{Delete{Route{Dst: ctl, Iface: "en0", Scoped: true, Via: newLanGw, Owned: true}}, Add{r1}},
 		},
 		{
 			name:    "a route with the same destination on another scope does not block",
-			table:   astrill(r2, Route{Dst: ctl, Iface: "en1", Scoped: true, Via: newLanGw}),
+			table:   splitDefault(r2, Route{Dst: ctl, Iface: "en1", Scoped: true, Via: newLanGw}),
 			control: answered(ctl),
 			want:    []Action{Add{r1}},
 		},
@@ -297,7 +296,7 @@ func TestPlan(t *testing.T) {
 }
 
 func TestBlocks(t *testing.T) {
-	f := DeriveFacts(astrill(workingOperatorR1, workingOperatorR2), answered(ctl))
+	f := DeriveFacts(splitDefault(workingOperatorR1, workingOperatorR2), answered(ctl))
 	want := []Blocked{
 		{Want: r2, By: workingOperatorR2},
 		{Want: r1, By: workingOperatorR1},
@@ -305,10 +304,10 @@ func TestBlocks(t *testing.T) {
 	if diff := cmp.Diff(want, Blocks(f), equateIP); diff != "" {
 		t.Errorf("Blocks (-want +got):\n%s", diff)
 	}
-	if got := Blocks(DeriveFacts(astrill(r1, r2), answered(ctl))); got != nil {
+	if got := Blocks(DeriveFacts(splitDefault(r1, r2), answered(ctl))); got != nil {
 		t.Errorf("Blocks on a correct table = %v, want none", got)
 	}
-	if got := Blocks(DeriveFacts(astrill(r2, staleOperatorR1), answered(ctl))); got != nil {
+	if got := Blocks(DeriveFacts(splitDefault(r2, staleOperatorR1), answered(ctl))); got != nil {
 		t.Errorf("Blocks with a stale operator route = %v, want none: Plan replaces it", got)
 	}
 }

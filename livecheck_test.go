@@ -101,14 +101,14 @@ func emitReconcileEvents(t *testing.T, log *slog.Logger) {
 	t.Helper()
 	ctx := t.Context()
 	// routes changed
-	(&fakeHost{table: append(slices.Clone(astrillTable), r1)}).daemon(log).reconcile(ctx, triggerRouteEvent)
+	(&fakeHost{table: append(slices.Clone(splitDefaultTable), r1)}).daemon(log).reconcile(ctx, triggerRouteEvent)
 	// route change failed
-	(&fakeHost{table: slices.Clone(astrillTable), applyErr: errors.New("route failed")}).daemon(log).reconcile(ctx, triggerStart)
+	(&fakeHost{table: slices.Clone(splitDefaultTable), applyErr: errors.New("route failed")}).daemon(log).reconcile(ctx, triggerStart)
 	// reconcile failed
 	(&fakeHost{fetchErr: errors.New("sysctl failed")}).daemon(log).reconcile(ctx, triggerBackstop)
 
 	// degraded by a DNS failure, then recovered
-	h := &fakeHost{table: append(slices.Clone(astrillTable), r1, r2), dnsErr: errors.New("no such host")}
+	h := &fakeHost{table: append(slices.Clone(splitDefaultTable), r1, r2), dnsErr: errors.New("no such host")}
 	d := h.daemon(log)
 	d.reconcile(ctx, triggerRouteEvent)
 	h.dnsErr = nil
@@ -116,7 +116,7 @@ func emitReconcileEvents(t *testing.T, log *slog.Logger) {
 
 	// degraded by an ambiguous VPN
 	ambiguous := []underlay.Route{
-		astrillTable[0], astrillTable[1],
+		splitDefaultTable[0], splitDefaultTable[1],
 		{Dst: netip.MustParsePrefix("128.0.0.0/1"), Iface: "utun6", Via: netip.MustParseAddr("198.18.65.1")},
 	}
 	(&fakeHost{table: ambiguous}).daemon(log).reconcile(ctx, triggerBackstop)
@@ -124,10 +124,10 @@ func emitReconcileEvents(t *testing.T, log *slog.Logger) {
 	// degraded by a blocked route
 	link := underlay.Route{Dst: netip.MustParsePrefix("192.168.2.0/24"), Iface: "en0"}
 	operator := underlay.Route{Dst: ctl, Iface: "en0", Scoped: true, Via: netip.MustParseAddr("192.168.2.1")}
-	(&fakeHost{table: append(slices.Clone(astrillTable), r2, link, operator)}).daemon(log).reconcile(ctx, triggerRouteEvent)
+	(&fakeHost{table: append(slices.Clone(splitDefaultTable), r2, link, operator)}).daemon(log).reconcile(ctx, triggerRouteEvent)
 
 	// degraded by a plan without effect: apply does not change the table
-	d = (&fakeHost{table: append(slices.Clone(astrillTable), r1)}).daemon(log)
+	d = (&fakeHost{table: append(slices.Clone(splitDefaultTable), r1)}).daemon(log)
 	d.reconcile(ctx, triggerRouteEvent)
 	d.reconcile(ctx, triggerRetry)
 }
