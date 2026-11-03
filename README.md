@@ -58,6 +58,9 @@ These two checks are read-only and need no root.
    go run github.com/Nagato-Yuzuru/tsunderlay@latest check
    ```
 
+   Without Go, get the binary as in [step 1 of Install](#install), and run
+   `tsunderlay check`.
+
    The `plan:` lines show the routes that tsunderlay would add.
 
 ## Why it happens
@@ -81,15 +84,39 @@ or reboot. tsunderlay adds them again within about one second.
 
 ## Install
 
-You need macOS and Go.
+You need macOS.
 
-1. **Install the binary.**
+1. **Get the binary.** Download it from the latest release, and put it on
+   your `PATH`:
+
+   ```sh
+   curl -fsSLO https://github.com/Nagato-Yuzuru/tsunderlay/releases/latest/download/tsunderlay-darwin-universal.tar.gz
+   tar -xzf tsunderlay-darwin-universal.tar.gz
+   sudo install -d /usr/local/bin
+   sudo install -m 0755 tsunderlay /usr/local/bin/tsunderlay
+   ```
+
+   The binary is not notarized by Apple. A file that you download with
+   `curl` runs. If you download it with a browser, macOS blocks it: run
+   `xattr -d com.apple.quarantine tsunderlay` before the install line.
+
+   The daemon runs this file as root. To make sure that the release workflow
+   of this repository built it, verify its attestation with the
+   [GitHub CLI](https://cli.github.com) before the install line:
+
+   ```sh
+   gh attestation verify tsunderlay-darwin-universal.tar.gz \
+     --repo Nagato-Yuzuru/tsunderlay \
+     --signer-workflow Nagato-Yuzuru/tsunderlay/.github/workflows/release.yml
+   ```
+
+   Or build it from source with Go:
 
    ```sh
    go install github.com/Nagato-Yuzuru/tsunderlay@latest
    ```
 
-   If `sudo` cannot find `tsunderlay` in the next steps, use the full path
+   If `sudo` cannot find the Go build in the next steps, use the full path
    `"$(go env GOPATH)/bin/tsunderlay"`.
 
 2. **Install the daemon.**
@@ -171,13 +198,15 @@ only what differs.
 
 ## Upgrade
 
+Get the new binary as in [step 1 of Install](#install), and install it
+again:
+
 ```sh
-go install github.com/Nagato-Yuzuru/tsunderlay@latest
 sudo tsunderlay install
 ```
 
 The daemon runs its own copy of the binary, so the upgrade has no effect until
-`sudo tsunderlay install`.
+this step.
 
 ## Uninstall
 
