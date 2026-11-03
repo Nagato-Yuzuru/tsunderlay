@@ -10,17 +10,26 @@ header_marker = "<!-- git-cliff: end of header -->"
 body = """
 {% if version %}\
     ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+
+    ```sh
+    go install github.com/Nagato-Yuzuru/tsunderlay@{{ version }}
+    sudo tsunderlay install
+    ```
 {% else %}\
     ## [unreleased]
 {% endif %}\
 {% for entry in commits | commit_groups(groups=commit_parsers_groups) %}
     ### {{ entry.group | striptags | trim | upper_first }}
     {% for commit in entry.commits %}
-        - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
-            {% if commit.breaking %}[**breaking**] {% endif %}\
-            {{ commit.message | upper_first }}\
+        - {% if commit.scope %}**{{ commit.scope }}:** {% endif %}\
+            {# The first release has no earlier version to break. #}\
+            {% if commit.breaking and previous.version %}**Breaking:** {% endif %}\
+            {{ commit.message | split(pat="\n") | first | upper_first | trim }}\
     {% endfor %}
 {% endfor %}
+{% if previous.version %}
+    **Full changelog**: https://github.com/Nagato-Yuzuru/tsunderlay/compare/{{ previous.version }}...{{ version }}
+{% endif %}
 """
 # Remove leading and trailing whitespaces from the changelog's body.
 trim = true
@@ -28,6 +37,7 @@ trim = true
 render_always = true
 # An array of regex based postprocessors to modify the changelog.
 postprocessors = [
+    { pattern = '\(#([0-9]+)\)', replace = '([#${1}](https://github.com/Nagato-Yuzuru/tsunderlay/pull/${1}))' },
     # Replace the placeholder <REPO> with a URL.
     #{ pattern = '<REPO>', replace = "https://github.com/orhun/git-cliff" },
 ]
@@ -56,7 +66,7 @@ commit_preprocessors = [
     #{ pattern = '.*', replace_command = 'typos --write-changes -' },
 ]
 # Prevent commits that are breaking from being excluded by commit parsers.
-protect_breaking_commits = false
+protect_breaking_commits = true
 # An array of regex based parsers for extracting data from the commit message.
 # Assigns commits to groups.
 # Optionally sets the commit's scope and can decide to exclude commits from further processing.
@@ -65,24 +75,17 @@ commit_parsers = [
     { sha = "d50d4132a10ea57c99062d3b1c0aa979ef7fd650", skip = true },
     { message = "^(fixup|squash|amend)! ", skip = true },
     { message = "^Merge ", skip = true },
-    { message = "^feat", group = "<!-- 0 -->🚀 Features" },
-    { message = "^fix", group = "<!-- 1 -->🐛 Bug Fixes" },
-    { message = "^doc", group = "<!-- 3 -->📚 Documentation" },
-    { message = "^perf", group = "<!-- 4 -->⚡ Performance" },
-    { message = "^refactor", group = "<!-- 2 -->🚜 Refactor" },
-    { message = "^style", group = "<!-- 5 -->🎨 Styling" },
-    { message = "^test", group = "<!-- 6 -->🧪 Testing" },
-    { message = "^chore\\(release\\): prepare for", skip = true },
-    { message = "^chore\\(deps.*\\)", skip = true },
-    { message = "^chore\\(pr\\)", skip = true },
-    { message = "^chore\\(pull\\)", skip = true },
-    { message = "^chore|^ci", group = "<!-- 7 -->⚙️ Miscellaneous Tasks" },
-    { body = ".*security", group = "<!-- 8 -->🛡️ Security" },
-    { message = "^revert", group = "<!-- 9 -->◀️ Revert" },
-    { message = ".*", group = "<!-- 10 -->💼 Other" },
+    # The notes list only what a user of tsunderlay can see.
+    { message = "^feat", group = "<!-- 0 -->Features" },
+    { message = "^fix", group = "<!-- 1 -->Bug fixes" },
+    { message = "^perf", group = "<!-- 2 -->Performance" },
+    { body = ".*security", group = "<!-- 3 -->Security" },
+    { message = "^doc", group = "<!-- 4 -->Documentation" },
+    { message = "^revert", group = "<!-- 5 -->Reverts" },
+    { message = "^(build|chore|ci|refactor|style|test)", skip = true },
 ]
 # Exclude commits that are not matched by any commit parser.
-filter_commits = false
+filter_commits = true
 # Fail on a commit that is not matched by any commit parser.
 fail_on_unmatched_commit = false
 # An array of link parsers for extracting external references, and turning them into URLs, using regex.
