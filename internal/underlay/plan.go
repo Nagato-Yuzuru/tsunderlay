@@ -83,15 +83,17 @@ func plan(f Facts) ([]Action, []Blocked) {
 // The upstream fixes that retire the stopgap parts. Each part exists
 // because of one upstream defect. When the fix ships, delete the part.
 const (
-	// tailscaleIssue21198 tracks both fixes of the system app below.
-	tailscaleIssue21198 = "https://github.com/tailscale/tailscale/issues/21198"
+	// tailscaleIssue16652: Tailscale on macOS does not use the VPN interface
+	// under a full-tunnel VPN. A fix for it retires both parts of the system
+	// app below.
+	tailscaleIssue16652 = "https://github.com/tailscale/tailscale/issues/16652"
 	// pointToPointLookupFix: the route lookup of the system app follows a
 	// point-to-point next hop (rtm_index). It retires R2.
-	pointToPointLookupFix = tailscaleIssue21198
+	pointToPointLookupFix = tailscaleIssue16652
 	// noBindByDefaultFix: the network extension stops binding each dial to
 	// the default interface, and same-LAN direct paths still work. It
 	// retires the env file line.
-	noBindByDefaultFix = tailscaleIssue21198
+	noBindByDefaultFix = tailscaleIssue16652
 	// rexBoundNode: the Rex embedded node starts bound to the LAN interface.
 	// It retires R1. The upstream request is not public, so it has no URL.
 	rexBoundNode = "Rex: embedded node starts bound to the interface"

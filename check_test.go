@@ -125,7 +125,7 @@ func TestReport(t *testing.T) {
 	addr := netip.MustParseAddr
 	pfx := netip.MustParsePrefix
 	lanDefault := underlay.Route{Dst: pfx("0.0.0.0/0"), Iface: "en0", Via: addr("192.168.2.1")}
-	astrill := []underlay.Route{
+	splitDefault := []underlay.Route{
 		lanDefault,
 		{Dst: pfx("0.0.0.0/1"), Iface: "utun5", Via: addr("198.18.64.1")},
 		{Dst: pfx("128.0.0.0/1"), Iface: "utun5", Via: addr("198.18.64.1")},
@@ -133,8 +133,8 @@ func TestReport(t *testing.T) {
 		{Dst: pfx("198.18.64.142/32"), Iface: "utun5"},
 	}
 	retire := `retire:  R1 (scoped control routes, for the Rex node): Rex: embedded node starts bound to the interface
-         R2 (host route to the VPN next hop, for the system app): https://github.com/tailscale/tailscale/issues/21198
-         env file line TS_BIND_TO_INTERFACE_BY_ROUTE=true (for the system app): https://github.com/tailscale/tailscale/issues/21198
+         R2 (host route to the VPN next hop, for the system app): https://github.com/tailscale/tailscale/issues/16652
+         env file line TS_BIND_TO_INTERFACE_BY_ROUTE=true (for the system app): https://github.com/tailscale/tailscale/issues/16652
 `
 	plan := `plan:
   /sbin/route -n add -proto1 -host 198.18.64.1 -interface utun5
@@ -148,7 +148,7 @@ func TestReport(t *testing.T) {
 	}{
 		{
 			name: "tunnel facts, warnings, and the retirement parts",
-			table: append(slices.Clone(astrill),
+			table: append(slices.Clone(splitDefault),
 				underlay.Route{Dst: pfx("0.0.0.0/0"), Iface: "utun3", Scoped: true},
 				underlay.Route{Dst: pfx("100.64.0.0/10"), Iface: "utun3"},
 				underlay.Route{Dst: pfx("100.100.100.100/32"), Iface: "utun3"},
@@ -156,9 +156,12 @@ func TestReport(t *testing.T) {
 				underlay.Route{Dst: pfx("10.253.0.0/16"), Iface: "utun6"},
 				underlay.Route{Dst: pfx("100.64.0.0/16"), Iface: "utun6"},
 				underlay.Route{Dst: pfx("192.200.0.104/32"), Iface: "utun6", Via: addr("10.9.0.1")},
+				underlay.Route{Dst: pfx("0.0.0.0/0"), Iface: "en0", Scoped: true, Via: addr("192.168.2.1")},
+				underlay.Route{Dst: pfx("0.0.0.0/0"), Iface: "bridge100", Scoped: true},
 			),
 			control: underlay.Control{Prefixes: []netip.Prefix{pfx("192.200.0.0/24"), pfx("203.0.113.0/24")}, Complete: true},
 			want: `lan:     en0 via 192.168.2.1
+note:    en0 has an interface-scoped default; sockets bound to en0 bypass the VPN. Delete it if you added it by hand: sudo route -n delete -ifscope en0 default
 vpn:     utun5 via 198.18.64.1
 tunnels: utun5: global 0/1 and 128.0/1; routes 198.18.64.0/20; tsunderlay follows it
          utun3 (Tailscale): scoped default; routes 100.64.0.0/10

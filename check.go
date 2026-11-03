@@ -79,8 +79,12 @@ func installNote(in install.Installer, want []byte) (note string, stale bool) {
 func report(f underlay.Facts, hosts []string, dnsErr error, plan []underlay.Action, blocked []underlay.Blocked) string {
 	lines := []string{
 		"lan:     " + lan(f.LAN),
-		"vpn:     " + vpn(f.VPN),
 	}
+	if underlay.ScopedLANDefault(f) {
+		lines = append(lines, fmt.Sprintf("note:    %[1]s has an interface-scoped default; sockets bound to %[1]s bypass the VPN. "+
+			"Delete it if you added it by hand: sudo route -n delete -ifscope %[1]s default", f.LAN.Iface))
+	}
+	lines = append(lines, "vpn:     "+vpn(f.VPN))
 	lines = append(lines, block("tunnels:", tunnelLines(underlay.Tunnels(f)))...)
 	lines = append(lines, fmt.Sprintf("control: %s -> %s", strings.Join(hosts, ", "), joinPrefixes(f.Control.Prefixes)))
 	if dnsErr != nil {
