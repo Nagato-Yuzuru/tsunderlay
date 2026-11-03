@@ -2,20 +2,18 @@
 
 ## Upgrade
 
-1. Install the new version:
-
-   ```sh
-   go install github.com/Nagato-Yuzuru/tsunderlay@latest
-   ```
+1. Get the new version as in
+   [step 1 of Install](../README.md#install): download it, or run
+   `go install github.com/Nagato-Yuzuru/tsunderlay@latest`.
 
 2. Copy it to the daemon and restart the daemon:
 
    ```sh
-   sudo tsunderlay install
+   sudo ./tsunderlay install
    ```
 
-   `go install` replaces only the binary in your Go bin directory. The daemon
-   runs its own copy, so the upgrade has no effect until this step. Until
+   For a Go build, run `sudo tsunderlay install`. The daemon runs its own
+   copy of the binary, so the upgrade has no effect until this step. Until
    then, `check` tells you that the installed daemon differs and exits with
    status 1.
 

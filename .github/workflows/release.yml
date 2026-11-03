@@ -1,35 +1,45 @@
-# The owner pushes a signed tag vX.Y.Z on main. This workflow checks the tag
-# and makes a draft GitHub Release with the notes that git-cliff generates.
-# The owner edits the draft and publishes it. The workflow makes no tag and
-# builds no binary. The operator installs with `go install ...@vX.Y.Z`.
+# The owner pushes a signed tag vX.Y.Z on main. This workflow checks the
+# tag, builds a universal darwin binary from it with a provenance
+# attestation, and makes a draft GitHub Release with the binary and the
+# notes that git-cliff generates. The owner edits the draft and publishes
+# it. The workflow makes no tag.
+#
+# A manual run takes an existing tag, for example a tag that an older
+# version of this workflow handled. It builds from the tag and updates its
+# draft. It does not move the tag: the Go module proxy keeps the content of
+# each version that it fetched.
 name: release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing version tag, for example v0.1.0
+        required: true
+        type: string
 
 permissions:
   contents: read
 
-# A release must not stop half way, so a second run waits.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
   MISE_LOCKED: "1"
   MISE_NO_HOOKS: "1"
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+# A release must not stop half way, so a second run for the same tag waits.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
-  draft:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
+    timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.ref_name }}
     steps:
       # Semver 2.0.0 with the prefix v. A tag with a pre-release part makes
       # a pre-release.
@@ -56,9 +66,9 @@ jobs:
             echo "::error::GitHub did not verify the signature of the tag $TAG: $reason"
             exit 1
           fi
-      # git-cliff and the main check need the full history and all tags.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: refs/tags/${{ env.TAG }}
           fetch-depth: 0
           persist-credentials: false
       - name: Check that the tag is on main
@@ -68,22 +78,122 @@ jobs:
             echo "::error::The tag $TAG is not on main"
             exit 1
           fi
+
+  build:
+    needs: verify
+    runs-on: macos-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      # A tag run must not restore a cache that another run wrote.
       - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
-        # A tag run must not restore a cache that another run wrote.
+        with:
+          install_args: go
+          cache: false
+      # go build at a clean checkout of the tag records the tag as the
+      # module version, which --version prints. The Go linker signs the
+      # arm64 slice ad hoc; Apple silicon runs no unsigned code.
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          for arch in arm64 amd64; do
+            GOOS=darwin GOARCH=$arch go build -trimpath -o "$RUNNER_TEMP/tsunderlay-$arch" .
+          done
+          lipo -create -output dist/tsunderlay "$RUNNER_TEMP/tsunderlay-arm64" "$RUNNER_TEMP/tsunderlay-amd64"
+          codesign --verify --arch arm64 dist/tsunderlay
+          got=$(dist/tsunderlay --version)
+          if [ "$got" != "tsunderlay version $TAG" ]; then
+            echo "::error::The binary reports \"$got\", not the version $TAG"
+            exit 1
+          fi
+      # The asset names have no version, so that a link to
+      # releases/latest/download/<name> stays valid. COPYFILE_DISABLE keeps
+      # the extended attributes of the runner out of the archive.
+      - name: Package
+        working-directory: dist
+        run: |
+          COPYFILE_DISABLE=1 tar -czf tsunderlay-darwin-universal.tar.gz tsunderlay
+          rm tsunderlay
+          shasum -a 256 tsunderlay-darwin-universal.tar.gz > SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/tsunderlay-darwin-universal.tar.gz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  draft:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # git-cliff needs the full history and all tags of the release, but
+      # the configuration of this run: a manual run for an old tag uses the
+      # current notes format.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          path: src
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: cfg
+          sparse-checkout: |
+            cliff.toml
+            mise.toml
+            mise.lock
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
         with:
           install_args: git-cliff
           cache: false
+          working_directory: cfg
       - name: Generate the notes
-        run: git-cliff --latest --output "$RUNNER_TEMP/notes.md"
-      - name: Create the draft
+        working-directory: cfg
+        run: git-cliff --repository ../src --config cliff.toml --current --output "$RUNNER_TEMP/notes.md"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+      # A published release belongs to its readers: the workflow changes
+      # only a draft.
+      - name: Create or update the draft
         run: |
           case "$TAG" in
             *-*) prerelease=--prerelease ;;
             *) prerelease= ;;
           esac
-          # shellcheck disable=SC2086 # an empty $prerelease must vanish
-          gh release create "$TAG" --draft --verify-tag --title "$TAG" \
-            --notes-file "$RUNNER_TEMP/notes.md" $prerelease
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::error::The release $TAG is published. Change it by hand"
+              exit 1
+            fi
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            # shellcheck disable=SC2086 # an empty $prerelease must vanish
+            gh release create "$TAG" --draft --verify-tag --title "$TAG" \
+              --notes-file "$RUNNER_TEMP/notes.md" $prerelease dist/*
+          fi
       # The tag is the Go release: go install can fetch the version before
       # the draft is published. The proxy fetches a version on the first
       # request for it, so this request makes the version available to
@@ -91,6 +201,6 @@ jobs:
       # upper-case letter as "!" and the lower case.
       - name: Fetch the version into the Go module proxy
         run: |
-          module=$(sed -n 's/^module //p' go.mod)
+          module=$(sed -n 's/^module //p' src/go.mod)
           escaped=$(printf '%s\n' "$module" | sed 's/[A-Z]/!\L&/g')
           curl -fsS --retry 3 "https://proxy.golang.org/$escaped/@v/$TAG.info"
