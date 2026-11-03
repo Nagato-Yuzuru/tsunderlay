@@ -96,8 +96,9 @@ func runDaemon(ctx context.Context, log *slog.Logger, urls, hosts []string) erro
 	return nil
 }
 
-// version is the module version that go build recorded, "(devel)" for a
-// local build.
+// version is the module version that the go command recorded: the tag for
+// go install of a version or a build at a tag, a pseudo-version for a build
+// at another commit, and "(devel)" for a build without VCS information.
 func version() string {
 	if info, ok := debug.ReadBuildInfo(); ok {
 		return info.Main.Version
