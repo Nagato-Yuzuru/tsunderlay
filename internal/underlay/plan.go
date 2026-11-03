@@ -80,6 +80,49 @@ func plan(f Facts) ([]Action, []Blocked) {
 	return actions, blocked
 }
 
+// The upstream fixes that retire the stopgap parts. Each part exists
+// because of one upstream defect. When the fix ships, delete the part.
+const (
+	// tailscaleIssue21198 tracks both fixes of the system app below.
+	tailscaleIssue21198 = "https://github.com/tailscale/tailscale/issues/21198"
+	// pointToPointLookupFix: the route lookup of the system app follows a
+	// point-to-point next hop (rtm_index). It retires R2.
+	pointToPointLookupFix = tailscaleIssue21198
+	// noBindByDefaultFix: the network extension stops binding each dial to
+	// the default interface, and same-LAN direct paths still work. It
+	// retires the env file line.
+	noBindByDefaultFix = tailscaleIssue21198
+	// rexBoundNode: the Rex embedded node starts bound to the LAN interface.
+	// It retires R1. The upstream request is not public, so it has no URL.
+	rexBoundNode = "Rex: embedded node starts bound to the interface"
+)
+
+// The env file line of the system app: with it, the network extension looks
+// up the route of each dial, so the dial follows R2. install writes it.
+const (
+	BindByRouteKey  = "TS_BIND_TO_INTERFACE_BY_ROUTE"
+	BindByRouteLine = BindByRouteKey + "=true"
+)
+
+// Part is a stopgap part of tsunderlay with the upstream fix that retires
+// it.
+type Part struct {
+	Name string
+	// Upstream is the URL of the upstream issue, or a description when the
+	// issue is not public.
+	Upstream string
+}
+
+// Parts returns the stopgap parts. The rules that make R1 and R2 are in
+// desired, and install writes the env file line.
+func Parts() []Part {
+	return []Part{
+		{Name: "R1 (scoped control routes, for the Rex node)", Upstream: rexBoundNode},
+		{Name: "R2 (host route to the VPN next hop, for the system app)", Upstream: pointToPointLookupFix},
+		{Name: "env file line " + BindByRouteLine + " (for the system app)", Upstream: noBindByDefaultFix},
+	}
+}
+
 func desired(f Facts) []Route {
 	vpn, ok := f.VPN.(SplitDefault)
 	if !ok {
@@ -91,7 +134,7 @@ func desired(f Facts) []Route {
 	// (TS_BIND_TO_INTERFACE_BY_ROUTE). That lookup follows one more hop only
 	// when it finds a link address, and a point-to-point VPN gives an IP
 	// address at both hops. A host route to the link fixes the lookup.
-	// Upstream: https://github.com/tailscale/tailscale/issues/21198
+	// Upstream: pointToPointLookupFix (see Parts).
 	if gw := vpn.Tunnel.Gateway; gw.IsValid() {
 		want = append(want, Route{Dst: netip.PrefixFrom(gw, gw.BitLen()), Iface: vpn.Tunnel.Iface, Owned: true})
 	}
@@ -99,8 +142,8 @@ func desired(f Facts) []Route {
 	// R1. Rex's embedded node binds its sockets to the LAN interface until
 	// its first netmap removes the binding, so its first control dial needs a
 	// scoped route.
-	// Upstream: Rex Beta Discord #feedback, "Tailscale for outbound
-	// connections".
+	// Upstream: rexBoundNode (see Parts). The Rex Beta Discord #feedback
+	// thread "Tailscale for outbound connections" is not public.
 	if f.LAN != nil {
 		for _, p := range controlPrefixes(f) {
 			want = append(want, Route{Dst: p, Iface: f.LAN.Iface, Scoped: true, Via: f.LAN.Gateway, Owned: true})

@@ -19,6 +19,7 @@ func TestRun(t *testing.T) {
 		// command.
 		{name: "zsh completion", args: []string{"completion", "zsh"}, wantCode: 0, wantStdout: "#compdef tsunderlay"},
 		{name: "bash completion", args: []string{"completion", "bash"}, wantCode: 0, wantStdout: "bash completion"},
+		{name: "version flag", args: []string{"--version"}, wantCode: 0, wantStdout: "tsunderlay version " + version()},
 		{name: "unknown command is a usage error", args: []string{"nope"}, wantCode: 2},
 		{name: "check takes no arguments", args: []string{"check", "extra"}, wantCode: 2},
 		// The argument checks run before the root check, so these cases

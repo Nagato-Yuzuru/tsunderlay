@@ -42,8 +42,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "tsunderlay",
-		Short: "Keep the routes that Tailscale needs while a full-tunnel VPN is up",
+		Use:     "tsunderlay",
+		Short:   "Keep the routes that Tailscale needs while a full-tunnel VPN is up",
+		Version: version(),
 		// run prints errors itself, and a usage text hides a runtime error.
 		SilenceErrors: true,
 		SilenceUsage:  true,
