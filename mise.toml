@@ -16,11 +16,9 @@ zizmor = "1.31.1"
 # renovate: datasource=docker depName=ghcr.io/cirruslabs/macos-golden-gate-base
 TSUNDERLAY_VM_IMAGE = "ghcr.io/cirruslabs/macos-golden-gate-base@sha256:5302a9ea6cd68c059d00fa253fe75c8ebdf4e0dc8c45d4e136ecc6e7a4c02b70"
 
-[tasks.lint]
-run = "golangci-lint run ./..."
-
-[tasks.test]
-run = "go test -race ./..."
+# `mise install` also installs the git hook of prek. CI sets MISE_NO_HOOKS=1.
+[hooks]
+postinstall = "prek install"
 
 [tasks."e2e:build"]
 description = "Compile the end-to-end test binary and the tsunderlay binaries that it installs, for darwin/arm64"

@@ -24,6 +24,7 @@ concurrency:
 
 env:
   MISE_LOCKED: "1"
+  MISE_NO_HOOKS: "1"
 
 jobs:
   govulncheck:
