@@ -8,7 +8,7 @@ require (
 	go.opentelemetry.io/otel v1.47.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.24.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	tailscale.com v1.104.2
 )
 
@@ -24,7 +24,7 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb // indirect
-	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.zx2c4.com/wireguard/windows v1.1.1 // indirect
 )
